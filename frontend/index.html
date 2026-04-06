@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Study Platform</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">AI Study Platform</div>
+
+      <div class="topbar-actions">
+        <div class="session-wrap">
+          <label for="session">Session</label>
+          <div class="select-shell session-shell">
+            <select id="session"></select>
+            <span class="select-arrow">âŒ„</span>
+          </div>
+        </div>
+
+        <button id="newSession" class="top-btn icon-btn">
+          <span class="btn-ico">ï¼‹</span>
+          <span>New</span>
+        </button>
+
+        <button id="renameSession" class="top-btn icon-btn">
+          <span class="btn-ico">âœژ</span>
+          <span>Rename</span>
+        </button>
+
+        <button id="deleteSession" class="top-btn icon-btn danger-soft">
+          <span class="btn-ico">ًں—‘</span>
+          <span>Delete</span>
+        </button>
+
+        <button id="themeToggle" class="top-btn icon-only" title="Toggle theme">âک¼</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="panel hero-panel">
+        <div class="panel-header">
+          <h2>Generation Settings</h2>
+        </div>
+
+        <div class="settings-grid">
+          <div class="field">
+            <label for="task">Task Type</label>
+            <div class="select-shell">
+              <select id="task" data-custom-select="true">
+                <option value="quiz_json">Quiz (JSON)</option>
+                <option value="flashcards_json">Flashcards (JSON)</option>
+                <option value="tricky_json">Tricky (JSON)</option>
+              </select>
+              <span class="select-arrow">âŒ„</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="n">Count (n)</label>
+            <input id="n" type="number" value="10" min="1" max="50" />
+          </div>
+
+          <div class="field">
+            <label for="view">View</label>
+            <div class="select-shell">
+              <select id="view" data-custom-select="true">
+                <option value="pretty">Pretty</option>
+                <option value="raw">Raw</option>
+              </select>
+              <span class="select-arrow">âŒ„</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="lang">Language</label>
+            <div class="select-shell">
+              <select id="lang" data-custom-select="true">
+                <option value="en" selected>English</option>
+                <option value="ar">Arabic</option>
+                <option value="tr">Turkish</option>
+              </select>
+              <span class="select-arrow">âŒ„</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="difficulty">Difficulty</label>
+            <div class="select-shell">
+              <select id="difficulty" data-custom-select="true">
+                <option value="easy">Easy</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+              <span class="select-arrow">âŒ„</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="mode">Mode</label>
+            <div class="select-shell">
+              <select id="mode" data-custom-select="true">
+                <option value="mixed">Mixed</option>
+                <option value="mcq_only">MCQ only</option>
+                <option value="short_only">Short only</option>
+              </select>
+              <span class="select-arrow">âŒ„</span>
+            </div>
+          </div>
+
+          <div class="field field-wide">
+            <label for="query">Focus Query</label>
+            <input id="query" type="text" placeholder="e.g., DHCP vs DNS" />
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <label class="check-item">
+            <input type="checkbox" id="strictFocus" />
+            <span>Strict Focus</span>
+          </label>
+
+          <label class="check-item">
+            <input type="checkbox" id="shuffleChoices" checked />
+            <span>Shuffle Choices</span>
+          </label>
+
+          <label class="check-item">
+            <input type="checkbox" id="examMode" />
+            <span>Exam Mode</span>
+          </label>
+
+          <label class="check-item">
+            <input type="checkbox" id="showAnswerKey" checked />
+            <span>Show Answer Key</span>
+          </label>
+        </div>
+
+        <div class="exam-tools">
+          <span id="scoreBox" class="score-chip" style="display:none;">Score: 0/0</span>
+          <button id="resetScore" style="display:none;">Reset</button>
+          <button id="finishExam" style="display:none;">Finish Exam</button>
+          <button id="printExam">Print</button>
+        </div>
+      </section>
+
+      <section class="panel selected-panel">
+        <div class="panel-header panel-header-compact">
+          <h3>Selected Sources</h3>
+        </div>
+        <div id="selectedPills" class="selected-pills row"></div>
+        <div id="selectedInfo" class="selected-info muted">No sources selected. Select sources from the library below.</div>
+      </section>
+
+      <div class="action-strip">
+        <button id="go" class="primary big-cta">Generate</button>
+        <button id="copy">Copy Output</button>
+
+        <div class="dropdown" id="downloadDropdown">
+          <button type="button" class="dropdown-toggle" id="downloadMenuBtn" aria-haspopup="true" aria-expanded="false">
+            Download
+            <span class="mini-arrow">âŒ„</span>
+          </button>
+          <div class="dropdown-menu" id="downloadMenu">
+            <button type="button" id="downloadTxtBtn" class="dropdown-item">Download TXT</button>
+            <button type="button" id="downloadJsonBtn" class="dropdown-item">Download JSON</button>
+            <button type="button" id="downloadCsvBtn" class="dropdown-item">Download CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <section class="panel result-panel">
+        <div id="status" class="status"></div>
+
+        <div class="retrieved-area">
+          <div class="retrieved-title">Retrieved Focus Support</div>
+          <div id="retrievedBox" class="retrieved-box muted"></div>
+        </div>
+
+        <div class="printHeader">
+          <div class="print-header-row">
+            <div class="print-header-left">
+              <h2>Exam</h2>
+            </div>
+
+            <div class="print-header-right">
+              <div class="print-line"><strong>Student Name:</strong> ________________________</div>
+              <div class="print-line"><strong>Student ID:</strong> __________________________</div>
+            </div>
+          </div>
+
+          <hr />
+        </div>
+
+        <div class="output-box">
+          <div id="outPretty"></div>
+          <pre id="outRaw"></pre>
+        </div>
+      </section>
+
+      <section class="panel manual-panel">
+        <div class="panel-header panel-header-stack">
+          <h3>Quick Manual Source</h3>
+          <p class="panel-sub">Paste lecture notes, slide content, or any short study material</p>
+        </div>
+
+        <div class="manual-grid">
+          <div class="field">
+            <label for="manualName">Source name (optional)</label>
+            <input id="manualName" type="text" placeholder="e.g., Chapter 5 Notes" />
+          </div>
+
+          <div class="field">
+            <label for="manualId">Source ID (optional, e.g. S3)</label>
+            <input id="manualId" type="text" placeholder="e.g., S3" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="manualText">Content</label>
+          <textarea id="manualText" class="manual-source-text" rows="5" placeholder="Paste text here..."></textarea>
+        </div>
+
+        <div class="manual-actions">
+          <button id="addManual" class="manual-add">Add as Source</button>
+        </div>
+      </section>
+
+      <section class="panel library-panel">
+        <div class="panel-header library-header">
+          <h3>Sources Library</h3>
+
+          <div class="library-actions">
+            <button id="refreshSources" class="icon-btn">
+              <span class="btn-ico">âں³</span>
+              <span>Refresh</span>
+            </button>
+            <button id="clearSources" class="icon-btn danger-soft">
+              <span class="btn-ico">ًں—‘</span>
+              <span>Clear All</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="upload-box">
+          <label for="file" class="upload-label">
+            <span class="upload-icon">â‡ھ</span>
+            <span>Upload PDF or TXT files</span>
+          </label>
+          <input type="file" id="file" accept=".pdf,.txt" />
+        </div>
+
+        <div id="sourcesList" class="sources-list library-list"></div>
+      </section>
+
+      <button class="help-fab" type="button" aria-label="Help">?</button>
+    </main>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
