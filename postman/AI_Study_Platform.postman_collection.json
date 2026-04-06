@@ -1,0 +1,40 @@
+{
+  "info": {
+    "name": "AI Study Platform (Local)",
+    "_postman_id": "ai-study-platform-local",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "Sources (list)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "X-Session-Id", "value": "{{session_id}}" }],
+        "url": { "raw": "{{base_url}}/sources", "host": ["{{base_url}}"], "path": ["sources"] }
+      }
+    },
+    {
+      "name": "Generate (quiz_json)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Session-Id", "value": "{{session_id}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_type\": \"quiz_json\",\n  \"n\": 2,\n  \"source_ids\": [\"S1\"],\n  \"focus_query\": \"hello\",\n  \"strict_focus\": true\n}"
+        },
+        "url": { "raw": "{{base_url}}/generate", "host": ["{{base_url}}"], "path": ["generate"] }
+      }
+    }
+  ]
+}
