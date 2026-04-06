@@ -296,7 +296,7 @@ body[data-theme="light"] .select-shell select{
 }
 
 .check-item input[type="checkbox"]:checked::after{
-  content: "âœ“";
+  content: "✓";
   position: absolute;
   inset: 0;
   display: grid;
@@ -415,7 +415,7 @@ button.primary:hover{
   font-size: 16px;
 }
 
-top-btn{
+.top-btn{
   min-height: 48px;
   padding: 0 18px;
 }
@@ -479,7 +479,7 @@ top-btn{
   z-index: 1000;
 }
 
-dropdown-menu.open{
+.dropdown-menu.open{
   display: block;
 }
 
