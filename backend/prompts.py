@@ -9,7 +9,7 @@ Return this exact schema:
       "type": "mcq",
       "question": "...",
       "choices": ["A) ...", "B) ...", "C) ...", "D) ..."],
-      "answer": "A",
+      "answer": "C",
       "explanation": "...",
       "citations": ["S1:p1"]
     }},
@@ -34,6 +34,9 @@ Rules:
 - If MODE="mcq_only": all items MUST be mcq.
 - If MODE="short_only": all items MUST be short.
 - SHUFFLE_CHOICES: if true, shuffle MCQ choices but keep correct "answer" consistent.
+- For MCQ items, "answer" MUST be the actual correct letter among A, B, C, or D.
+- Do NOT default to "A".
+- Distribute correct answer positions naturally across A, B, C, and D when possible.
 Style constraints:
 - For short-answer items, the answer must be very short: maximum 3 words.
 - Accept concise exact answers such as a single number, term, or name when supported by sources.
@@ -92,6 +95,9 @@ Rules:
 - Write all questions/answers/explanations in language: {language}.
 - Difficulty level: {difficulty}. (easy=direct, medium=conceptual, hard=trickier/confusions)
 - SHUFFLE_CHOICES: if true, shuffle MCQ choices but keep correct "answer" consistent.
+- For MCQ items, "answer" MUST be the actual correct letter among A, B, C, or D.
+- Do NOT default to "A".
+- Distribute correct answer positions naturally across A, B, C, and D when possible.
 Style constraints:
 - For short-answer items, the answer must be very short: maximum 3 words.
 - Accept concise exact answers such as a single number, term, or name when supported by sources.

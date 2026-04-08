@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import time
 from collections import defaultdict, deque
@@ -575,6 +576,68 @@ def _safe_int(x, default=5, min_v=1, max_v=50):
     return max(min_v, min(max_v, v))
 
 
+def _choice_label(index: int) -> str:
+    return chr(ord("A") + index)
+
+
+def _strip_choice_label(choice: str) -> str:
+    return re.sub(r"^\s*[A-D]\s*[\)\.\:\-]\s*", "", str(choice or "").strip(), flags=re.IGNORECASE)
+
+
+def _shuffle_mcq_items(task_type: str, obj: dict, shuffle_choices: bool) -> dict:
+    if not shuffle_choices or task_type not in ("quiz_json", "tricky_json"):
+        return obj
+
+    items = obj.get("items")
+    if not isinstance(items, list):
+        return obj
+
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict) or item.get("type") != "mcq":
+            continue
+
+        choices = item.get("choices")
+        answer = str(item.get("answer") or "").strip().upper()
+        if not isinstance(choices, list) or len(choices) != 4 or answer not in {"A", "B", "C", "D"}:
+            continue
+
+        correct_index = ord(answer) - ord("A")
+        if correct_index < 0 or correct_index >= len(choices):
+            continue
+
+        normalized_choices = [_strip_choice_label(choice) for choice in choices]
+        if any(not choice for choice in normalized_choices):
+            continue
+
+        seed_text = json.dumps(
+            {
+                "task_type": task_type,
+                "index": idx,
+                "question": item.get("question", ""),
+                "answer": answer,
+                "choices": normalized_choices,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        rng = random.Random(seed_text)
+        order = list(range(len(normalized_choices)))
+        rng.shuffle(order)
+
+        shuffled_choices = [normalized_choices[i] for i in order]
+        item["choices"] = [
+            f"{_choice_label(i)}) {choice}" for i, choice in enumerate(shuffled_choices)
+        ]
+        item["answer"] = _choice_label(order.index(correct_index))
+
+    return obj
+
+
+def _serialize_output(task_type: str, obj: dict, shuffle_choices: bool) -> tuple[dict, str]:
+    processed = _shuffle_mcq_items(task_type, obj, shuffle_choices)
+    return processed, json.dumps(processed, ensure_ascii=False)
+
+
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
@@ -1059,7 +1122,15 @@ def generate():
 
                 _validate_count(task_type, obj2, n)
                 _validate_citations(task_type, obj2, allowed)
-                return jsonify({"task_type": task_type, "output": out2, "repaired": True})
+                obj2, out2 = _serialize_output(task_type, obj2, shuffle_choices)
+                return jsonify(
+                    {
+                        "task_type": task_type,
+                        "output": out2,
+                        "output_json": obj2,
+                        "repaired": True,
+                    }
+                )
 
             except Exception:
                 return jsonify(
@@ -1070,6 +1141,7 @@ def generate():
                     }
                 ), 422
 
+        obj, out = _serialize_output(task_type, obj, shuffle_choices)
         return jsonify(
             {
                 "task_type": task_type,
