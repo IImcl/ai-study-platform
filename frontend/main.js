@@ -13,6 +13,7 @@ function resolveApiBase() {
 
 const API_BASE = resolveApiBase();
 const SELECTED_KEY = "ai_selected_sources";
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 function loadSelected() {
   try { return new Set(JSON.parse(localStorage.getItem(SELECTED_KEY) || "[]")); }
@@ -514,14 +515,32 @@ window.addEventListener("DOMContentLoaded", () => {
   const manualIdEl = document.getElementById("manualId");
   const manualTextEl = document.getElementById("manualText");
 
-  const sessionSel = document.getElementById("session");
   const newSessionBtn = document.getElementById("newSession");
-  const renameSessionBtn = document.getElementById("renameSession");
-  const deleteSessionBtn = document.getElementById("deleteSession");
+  const sessionListEl = document.getElementById("sessionList");
+  const sessionCountEl = document.getElementById("sessionCount");
+  const sessionArchiveHintEl = document.getElementById("sessionArchiveHint");
+  const currentSessionLabelEl = document.getElementById("currentSessionLabel");
+  const sidebarEl = document.getElementById("workspaceSidebar");
+  const sidebarBackdropEl = document.getElementById("sidebarBackdrop");
+  const sidebarToggleBtn = document.getElementById("sidebarToggle");
+  const sidebarCloseBtn = document.getElementById("sidebarClose");
+  const modalEl = document.getElementById("appModal");
+  const modalCloseBtn = document.getElementById("modalClose");
+  const modalTitleEl = document.getElementById("modalTitle");
+  const modalMessageEl = document.getElementById("modalMessage");
+  const modalFieldWrapEl = document.getElementById("modalFieldWrap");
+  const modalInputLabelEl = document.getElementById("modalInputLabel");
+  const modalInputEl = document.getElementById("modalInput");
+  const modalHelpEl = document.getElementById("modalHelp");
+  const modalErrorEl = document.getElementById("modalError");
+  const modalCancelBtn = document.getElementById("modalCancel");
+  const modalConfirmBtn = document.getElementById("modalConfirm");
   const themeBtn = document.getElementById("themeToggle");
 
   let lastRaw = "";
   let selected = loadSelected();
+  let sessionsCache = [];
+  let modalState = null;
 
   function syncOutputView() {
     const rawMode = viewEl && viewEl.value === "raw";
@@ -551,6 +570,340 @@ window.addEventListener("DOMContentLoaded", () => {
       if (exceptMenu && btn.nextElementSibling === exceptMenu) return;
       btn.setAttribute("aria-expanded", "false");
     });
+  }
+
+  function closeSessionActionMenus(exceptMenu = null) {
+    document.querySelectorAll(".session-actions-menu.open").forEach((menu) => {
+      if (exceptMenu && menu === exceptMenu) return;
+      menu.classList.remove("open");
+    });
+
+    document.querySelectorAll(".session-item-trigger[aria-expanded='true']").forEach((btn) => {
+      if (exceptMenu && btn.nextElementSibling === exceptMenu) return;
+      btn.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function openSidebar() {
+    if (!sidebarEl || !sidebarBackdropEl) return;
+    sidebarEl.classList.add("open");
+    sidebarBackdropEl.classList.add("open");
+    document.body.classList.add("sidebar-open");
+  }
+
+  function closeSidebar() {
+    if (!sidebarEl || !sidebarBackdropEl) return;
+    sidebarEl.classList.remove("open");
+    sidebarBackdropEl.classList.remove("open");
+    document.body.classList.remove("sidebar-open");
+  }
+
+  function setModalError(message = "") {
+    if (!modalErrorEl) return;
+    modalErrorEl.textContent = message;
+    modalErrorEl.hidden = !message;
+  }
+
+  function closeModal(result = { confirmed: false, value: "" }) {
+    if (!modalState || !modalEl) return;
+
+    const resolve = modalState.resolve;
+    modalState = null;
+    modalEl.hidden = true;
+    modalEl.classList.remove("open");
+    modalEl.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("modal-open");
+    modalConfirmBtn?.classList.remove("button-danger");
+    setModalError("");
+
+    if (resolve) resolve(result);
+  }
+
+  function confirmModalAction() {
+    if (!modalState) return;
+
+    const inputConfig = modalState.inputConfig;
+    const value = String(modalInputEl?.value || "").trim();
+
+    if (inputConfig) {
+      if (inputConfig.required && !value) {
+        setModalError(inputConfig.requiredMessage || "This field is required.");
+        modalInputEl?.focus();
+        return;
+      }
+
+      if (typeof inputConfig.validate === "function") {
+        const error = inputConfig.validate(value);
+        if (error) {
+          setModalError(error);
+          modalInputEl?.focus();
+          return;
+        }
+      }
+    }
+
+    closeModal({ confirmed: true, value });
+  }
+
+  function openModal({
+    title,
+    message = "",
+    confirmLabel = "Confirm",
+    cancelLabel = "Cancel",
+    danger = false,
+    input = null
+  }) {
+    if (!modalEl) return Promise.resolve({ confirmed: false, value: "" });
+
+    if (modalState) closeModal();
+
+    closeDownloadMenu();
+    closeCustomSelectMenus();
+    closeSessionActionMenus();
+
+    modalTitleEl.textContent = title || "Confirm";
+    modalMessageEl.textContent = message || "";
+    modalMessageEl.hidden = !message;
+    modalCancelBtn.textContent = cancelLabel;
+    modalConfirmBtn.textContent = confirmLabel;
+    modalConfirmBtn.classList.toggle("button-danger", !!danger);
+
+    setModalError("");
+
+    if (input) {
+      modalFieldWrapEl.hidden = false;
+      modalInputLabelEl.textContent = input.label || "Value";
+      modalInputEl.value = input.value || "";
+      modalInputEl.placeholder = input.placeholder || "";
+      modalInputEl.maxLength = input.maxLength || 200;
+      modalHelpEl.textContent = input.help || "";
+      modalHelpEl.hidden = !modalHelpEl.textContent;
+    } else {
+      modalFieldWrapEl.hidden = true;
+      modalInputEl.value = "";
+      modalHelpEl.textContent = "";
+      modalHelpEl.hidden = true;
+    }
+
+    modalEl.hidden = false;
+    modalEl.classList.add("open");
+    modalEl.setAttribute("aria-hidden", "false");
+    document.body.classList.add("modal-open");
+
+    return new Promise((resolve) => {
+      modalState = {
+        resolve,
+        inputConfig: input
+      };
+
+      window.setTimeout(() => {
+        if (input) modalInputEl?.focus();
+        else modalConfirmBtn?.focus();
+      }, 0);
+    });
+  }
+
+  function getSessionDisplayName(session) {
+    const raw = String(session?.name || session?.session_id || "").trim();
+    if (!raw) return "Untitled chat";
+    return raw;
+  }
+
+  function syncCurrentSessionLabel() {
+    if (!currentSessionLabelEl) return;
+    const current = sessionsCache.find((session) => session.session_id === sessionId);
+    currentSessionLabelEl.textContent = getSessionDisplayName(current || { session_id: sessionId });
+  }
+
+  function renderSessionList() {
+    if (!sessionListEl) return;
+
+    sessionListEl.innerHTML = "";
+
+    if (sessionCountEl) sessionCountEl.textContent = String(sessionsCache.length);
+
+    const savedCount = sessionsCache.filter((session) => session.session_id !== "local").length;
+    if (sessionArchiveHintEl) {
+      sessionArchiveHintEl.textContent = savedCount
+        ? ""
+        : "No saved conversations yet. Create one to start your archive.";
+    }
+
+    if (!sessionsCache.length) {
+      const empty = document.createElement("div");
+      empty.className = "session-empty";
+      empty.textContent = "No conversations found.";
+      sessionListEl.appendChild(empty);
+      return;
+    }
+
+    sessionsCache.forEach((session) => {
+      const item = document.createElement("div");
+      item.className = "session-item";
+      if (session.session_id === sessionId) item.classList.add("active");
+
+      const mainBtn = document.createElement("button");
+      mainBtn.type = "button";
+      mainBtn.className = "session-item-main";
+      mainBtn.setAttribute("aria-current", session.session_id === sessionId ? "true" : "false");
+
+      const title = document.createElement("span");
+      title.className = "session-item-title";
+      title.textContent = getSessionDisplayName(session);
+
+      const meta = document.createElement("span");
+      meta.className = "session-item-meta";
+      meta.textContent = session.session_id === "local" ? "Local default session" : session.session_id;
+
+      mainBtn.appendChild(title);
+      mainBtn.appendChild(meta);
+      mainBtn.addEventListener("click", async () => {
+        closeSessionActionMenus();
+        if (session.session_id === sessionId) {
+          closeSidebar();
+          return;
+        }
+
+        sessionId = session.session_id;
+        localStorage.setItem("session_id", sessionId);
+        selected.clear();
+        saveSelected(selected);
+        updateSelectedInfo();
+        syncCurrentSessionLabel();
+        closeSidebar();
+        await loadSessions();
+        await refreshSources();
+      });
+
+      const actions = document.createElement("div");
+      actions.className = "session-actions";
+
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "icon-only session-item-trigger";
+      trigger.setAttribute("aria-haspopup", "true");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.setAttribute("title", `Actions for ${session.session_id}`);
+      trigger.textContent = "...";
+
+      const menu = document.createElement("div");
+      menu.className = "session-actions-menu";
+
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "session-menu-item";
+      renameBtn.textContent = "Rename";
+      renameBtn.addEventListener("click", async () => {
+        closeSessionActionMenus();
+
+        const result = await openModal({
+          title: "Rename conversation",
+          message: `Rename "${session.session_id}".`,
+          confirmLabel: "Save",
+          input: {
+            label: "Session ID",
+            value: session.session_id,
+            placeholder: "letters, numbers, _ or -",
+            help: "Use 1-40 letters, numbers, underscores, or hyphens.",
+            required: true,
+            requiredMessage: "Session ID is required.",
+            validate: (value) => (
+              SESSION_ID_RE.test(value)
+                ? ""
+                : "Use 1-40 letters, numbers, underscores, or hyphens only."
+            )
+          }
+        });
+
+        if (!result.confirmed) return;
+
+        try {
+          await apiFetchJson("/sessions/rename", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ from: session.session_id, to: result.value })
+          });
+
+          if (session.session_id === sessionId) {
+            sessionId = result.value;
+            localStorage.setItem("session_id", sessionId);
+            syncCurrentSessionLabel();
+          }
+
+          setText(statusEl, `Session renamed to: ${result.value}`);
+          await loadSessions();
+          if (session.session_id === sessionId || result.value === sessionId) {
+            await refreshSources();
+          }
+        } catch (e) {
+          setText(statusEl, `Rename failed: ${e.message}`);
+        }
+      });
+
+      menu.appendChild(renameBtn);
+
+      if (session.session_id !== "local") {
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "session-menu-item danger";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.addEventListener("click", async () => {
+          closeSessionActionMenus();
+
+          const result = await openModal({
+            title: "Delete conversation",
+            message: `Delete "${session.session_id}" and all of its sources? This cannot be undone.`,
+            confirmLabel: "Delete",
+            danger: true
+          });
+
+          if (!result.confirmed) return;
+
+          try {
+            await apiFetchJson(`/sessions/${encodeURIComponent(session.session_id)}`, {
+              method: "DELETE"
+            });
+
+            const wasCurrent = session.session_id === sessionId;
+            if (wasCurrent) {
+              sessionId = "local";
+              localStorage.setItem("session_id", sessionId);
+              selected.clear();
+              saveSelected(selected);
+              updateSelectedInfo();
+              syncCurrentSessionLabel();
+            }
+
+            setText(statusEl, `Session deleted: ${session.session_id}`);
+            await loadSessions();
+            if (wasCurrent) await refreshSources();
+          } catch (e) {
+            setText(statusEl, `Delete session failed: ${e.message}`);
+          }
+        });
+
+        menu.appendChild(deleteBtn);
+      }
+
+      trigger.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeDownloadMenu();
+        closeCustomSelectMenus();
+        const willOpen = !menu.classList.contains("open");
+        closeSessionActionMenus();
+        menu.classList.toggle("open", willOpen);
+        trigger.setAttribute("aria-expanded", String(willOpen));
+      });
+
+      actions.appendChild(trigger);
+      actions.appendChild(menu);
+
+      item.appendChild(mainBtn);
+      item.appendChild(actions);
+      sessionListEl.appendChild(item);
+    });
+
+    syncCurrentSessionLabel();
   }
 
   function enhanceSelect(selectEl) {
@@ -619,6 +972,7 @@ window.addEventListener("DOMContentLoaded", () => {
     toggle.addEventListener("click", (e) => {
       e.stopPropagation();
       closeDownloadMenu();
+      closeSessionActionMenus();
 
       const willOpen = !menu.classList.contains("open");
       closeCustomSelectMenus();
@@ -653,11 +1007,55 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.addEventListener("click", () => {
     closeCustomSelectMenus();
+    closeSessionActionMenus();
   });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (modalState) {
+        closeModal();
+        return;
+      }
+
       closeCustomSelectMenus();
+      closeSessionActionMenus();
+      closeDownloadMenu();
+      closeSidebar();
+    }
+  });
+
+  sidebarToggleBtn?.addEventListener("click", () => {
+    openSidebar();
+  });
+
+  sidebarCloseBtn?.addEventListener("click", () => {
+    closeSidebar();
+  });
+
+  sidebarBackdropEl?.addEventListener("click", () => {
+    closeSidebar();
+  });
+
+  modalCancelBtn?.addEventListener("click", () => {
+    closeModal();
+  });
+
+  modalCloseBtn?.addEventListener("click", () => {
+    closeModal();
+  });
+
+  modalEl?.addEventListener("click", (e) => {
+    if (e.target?.dataset?.modalClose === "true") closeModal();
+  });
+
+  modalConfirmBtn?.addEventListener("click", () => {
+    confirmModalAction();
+  });
+
+  modalInputEl?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmModalAction();
     }
   });
 
@@ -817,7 +1215,13 @@ window.addEventListener("DOMContentLoaded", () => {
         const delBtn = document.createElement("button");
         delBtn.textContent = "Delete";
         delBtn.addEventListener("click", async () => {
-          if (!confirm(`Delete source "${s.source_id}"?`)) return;
+          const result = await openModal({
+            title: "Delete source",
+            message: `Delete source "${s.source_id}" from the current session?`,
+            confirmLabel: "Delete",
+            danger: true
+          });
+          if (!result.confirmed) return;
 
           setText(statusEl, "Deleting...");
 
@@ -857,21 +1261,56 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function loadSessions() {
-    const res = await fetch(`${API_BASE}/sessions`, { headers: withSession({}) });
-    const data = await res.json().catch(() => ({}));
-    const list = (data.sessions || []).map(s => s.session_id);
+    try {
+      const data = await apiFetchJson("/sessions", { method: "GET" });
+      const seen = new Set();
+      const list = [];
 
-    if (!list.includes("local")) list.push("local");
-    if (!list.includes(sessionId)) list.unshift(sessionId);
+      (data.sessions || []).forEach((session) => {
+        const id = String(session.session_id || "").trim();
+        if (!id || seen.has(id)) return;
 
-    sessionSel.innerHTML = "";
-    list.forEach(id => {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = id;
-      if (id === sessionId) opt.selected = true;
-      sessionSel.appendChild(opt);
-    });
+        seen.add(id);
+        list.push({
+          session_id: id,
+          name: String(session.name || id).trim() || id,
+          created_at: session.created_at || 0,
+          updated_at: session.updated_at || 0
+        });
+      });
+
+      if (!seen.has("local")) {
+        list.push({
+          session_id: "local",
+          name: "Local chat",
+          created_at: 0,
+          updated_at: 0
+        });
+      }
+
+      if (!seen.has(sessionId)) {
+        list.unshift({
+          session_id: sessionId,
+          name: sessionId === "local" ? "Local chat" : sessionId,
+          created_at: 0,
+          updated_at: 0
+        });
+      }
+
+      sessionsCache = list;
+      renderSessionList();
+    } catch (e) {
+      sessionsCache = [
+        {
+          session_id: sessionId,
+          name: sessionId === "local" ? "Local chat" : sessionId,
+          created_at: 0,
+          updated_at: 0
+        }
+      ];
+      renderSessionList();
+      setText(statusEl, `Load sessions failed: ${e.message}`);
+    }
   }
 
   async function addManualSource() {
@@ -1080,6 +1519,7 @@ window.addEventListener("DOMContentLoaded", () => {
     downloadMenuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       closeCustomSelectMenus();
+      closeSessionActionMenus();
       const isOpen = downloadMenu.classList.toggle("open");
       downloadMenuBtn.setAttribute("aria-expanded", String(isOpen));
     });
@@ -1167,33 +1607,43 @@ window.addEventListener("DOMContentLoaded", () => {
     printBtn.addEventListener("click", () => window.print());
   }
 
-  sessionSel.addEventListener("change", async () => {
-    sessionId = sessionSel.value;
-    localStorage.setItem("session_id", sessionId);
-    selected.clear();
-    saveSelected(selected);
-    updateSelectedInfo();
-    await refreshSources();
-  });
-
-  newSessionBtn.addEventListener("click", async () => {
-    const id = (prompt("New session id (letters/numbers/_/-):") || "").trim();
-    if (!id) return;
+  newSessionBtn?.addEventListener("click", async () => {
+    const result = await openModal({
+      title: "Create conversation",
+      message: "Create a new conversation archive using a session ID.",
+      confirmLabel: "Create",
+      input: {
+        label: "Session ID",
+        value: "",
+        placeholder: "letters, numbers, _ or -",
+        help: "Use 1-40 letters, numbers, underscores, or hyphens.",
+        required: true,
+        requiredMessage: "Session ID is required.",
+        validate: (value) => (
+          SESSION_ID_RE.test(value)
+            ? ""
+            : "Use 1-40 letters, numbers, underscores, or hyphens only."
+        )
+      }
+    });
+    if (!result.confirmed) return;
 
     try {
       await apiFetchJson("/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: id })
+        body: JSON.stringify({ session_id: result.value, name: result.value })
       });
 
-      sessionId = id;
+      sessionId = result.value;
       localStorage.setItem("session_id", sessionId);
       selected.clear();
       saveSelected(selected);
       updateSelectedInfo();
+      syncCurrentSessionLabel();
+      closeSidebar();
 
-      setText(statusEl, `Session created: ${id}`);
+      setText(statusEl, `Session created: ${result.value}`);
       await loadSessions();
       await refreshSources();
     } catch (e) {
@@ -1201,60 +1651,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  renameSessionBtn.addEventListener("click", async () => {
-    const to = (prompt("Rename current session to:") || "").trim();
-    if (!to) return;
-
-    try {
-      await apiFetchJson("/sessions/rename", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: sessionId, to })
-      });
-
-      sessionId = to;
-      localStorage.setItem("session_id", sessionId);
-
-      setText(statusEl, `Session renamed to: ${to}`);
-      await loadSessions();
-      await refreshSources();
-    } catch (e) {
-      setText(statusEl, `Rename failed: ${e.message}`);
-    }
-  });
-
-  deleteSessionBtn.addEventListener("click", async () => {
-    if (sessionId === "local") {
-      setText(statusEl, "The local session cannot be deleted.");
-      return;
-    }
-    if (!confirm(`Delete session "${sessionId}"?`)) return;
-
-    const oldId = sessionId;
-
-    try {
-      await apiFetchJson(`/sessions/${encodeURIComponent(oldId)}`, {
-        method: "DELETE"
-      });
-
-      sessionId = "local";
-      localStorage.setItem("session_id", sessionId);
-      selected.clear();
-      saveSelected(selected);
-      updateSelectedInfo();
-
-      setText(statusEl, `Session deleted: ${oldId}`);
-      await loadSessions();
-      await refreshSources();
-    } catch (e) {
-      setText(statusEl, `Delete session failed: ${e.message}`);
-    }
-  });
-
   refreshBtn.addEventListener("click", refreshSources);
 
   clearBtn.addEventListener("click", async () => {
-    if (!confirm("Clear all sources in this session?")) return;
+    const result = await openModal({
+      title: "Clear all sources",
+      message: "Delete every source in the current session? This cannot be undone.",
+      confirmLabel: "Clear all",
+      danger: true
+    });
+    if (!result.confirmed) return;
 
     try {
       await apiFetchJson("/sources", { method: "DELETE" });
