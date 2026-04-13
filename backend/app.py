@@ -83,6 +83,7 @@ MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "30"))
 MAX_PAGE_CHARS = int(os.getenv("MAX_PAGE_CHARS", "12000"))
 MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "250000"))
 MAX_SOURCES_CHARS_PER_REQUEST = int(os.getenv("MAX_SOURCES_CHARS_PER_REQUEST", "300000"))
+MAX_SESSION_NAME_CHARS = int(os.getenv("MAX_SESSION_NAME_CHARS", "120"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gpt-4.1-mini")
 
@@ -112,13 +113,16 @@ app.logger.addHandler(handler)
 init_db()
 
 
+def is_valid_session_id(sid: str) -> bool:
+    return bool(SESSION_RE.match(sid or "")) and sid != "local"
+
+
 def get_session_id_from_request(req, data=None):
     sid = req.headers.get("X-Session-Id")
     if not sid and isinstance(data, dict):
         sid = data.get("session_id")
-    if not sid:
-        sid = "local"
-    return sid
+    sid = (sid or "").strip()
+    return sid if is_valid_session_id(sid) else None
 
 
 def ensure_session(sid: str):
@@ -132,11 +136,60 @@ def ensure_session(sid: str):
 
 
 def get_session_id():
-    sid = (request.headers.get("X-Session-Id") or "local").strip() or "local"
-    if not SESSION_RE.match(sid):
+    sid = (request.headers.get("X-Session-Id") or "").strip()
+    if not is_valid_session_id(sid):
         return None
     ensure_session(sid)
     return sid
+
+
+def _normalize_session_name(value) -> str:
+    collapsed = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(collapsed) <= MAX_SESSION_NAME_CHARS:
+        return collapsed
+    return collapsed[:MAX_SESSION_NAME_CHARS].rstrip()
+
+
+def _session_title_is_default(session_id: str, name: str) -> bool:
+    normalized = _normalize_session_name(name)
+    return not normalized or normalized == session_id
+
+
+def _set_session_name(session_id: str, name: str) -> str:
+    normalized = _normalize_session_name(name)
+    now = int(time.time())
+
+    ensure_session(session_id)
+    with db() as conn:
+        conn.execute(
+            "UPDATE sessions SET name=?, updated_at=? WHERE session_id=?",
+            (normalized, now, session_id),
+        )
+
+    return normalized
+
+
+def _maybe_auto_title_session_from_filename(session_id: str, filename: str) -> str:
+    title = _normalize_session_name(os.path.splitext(os.path.basename(filename or ""))[0])
+    if not title:
+        return ""
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name FROM sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM sources WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+
+    current_name = row["name"] if row else ""
+    total_sources = int((count_row["total"] if count_row else 0) or 0)
+    if total_sources != 1 or not _session_title_is_default(session_id, current_name):
+        return ""
+
+    return _set_session_name(session_id, title)
 
 
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
@@ -645,20 +698,26 @@ def health():
 
 @app.get("/sessions")
 def list_sessions():
+    session_id = get_session_id()
+    if not session_id:
+        return jsonify({"error": "MISSING_OR_INVALID_SESSION_ID"}), 400
+
     with db() as conn:
-        rows = conn.execute(
-            "SELECT session_id, name, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
-        ).fetchall()
-    return jsonify({"sessions": [dict(r) for r in rows]})
+        row = conn.execute(
+            "SELECT session_id, name, created_at, updated_at FROM sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+    return jsonify({"sessions": [dict(row)] if row else []})
 
 
 @app.post("/sessions")
 def create_session():
     data = request.get_json(force=True, silent=True) or {}
     sid = (data.get("session_id") or "").strip()
-    name = (data.get("name") or sid).strip()
-    if not SESSION_RE.match(sid):
+    if not is_valid_session_id(sid):
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
+    raw_name = data["name"] if "name" in data else sid
+    name = _normalize_session_name(raw_name)
     now = int(time.time())
     with db() as conn:
         conn.execute(
@@ -672,13 +731,24 @@ def create_session():
     return jsonify({"ok": True, "session_id": sid})
 
 
+@app.post("/sessions/set-name")
+def set_session_name():
+    data = request.get_json(force=True, silent=True) or {}
+    sid = (data.get("session_id") or "").strip()
+    if not is_valid_session_id(sid):
+        return jsonify({"error": "INVALID_SESSION_ID"}), 400
+
+    name = _set_session_name(sid, data.get("name", ""))
+    return jsonify({"ok": True, "session_id": sid, "name": name})
+
+
 @app.post("/sessions/rename")
 def rename_session():
     data = request.get_json(force=True, silent=True) or {}
     old = (data.get("from") or "").strip()
     new = (data.get("to") or "").strip()
 
-    if not SESSION_RE.match(old) or not SESSION_RE.match(new):
+    if not is_valid_session_id(old) or not is_valid_session_id(new):
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
 
     if old == new:
@@ -713,7 +783,7 @@ def rename_session():
 @app.delete("/sessions/<sid>")
 def delete_session(sid):
     sid = (sid or "").strip()
-    if not SESSION_RE.match(sid) or sid == "local":
+    if not is_valid_session_id(sid):
         return jsonify({"error": "INVALID_OR_PROTECTED_SESSION"}), 400
     with db() as conn:
         for t in ("sources", "pages", "indexing_status"):
@@ -1229,7 +1299,8 @@ def upload():
     if not session_id:
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
     f = request.files["file"]
-    filename = (f.filename or "").lower()
+    original_filename = (f.filename or "").strip()
+    filename = original_filename.lower()
 
     # Use the frontend-provided source_id when present, otherwise generate the next one.
     source_id = (request.form.get("source_id") or "").strip()
@@ -1271,6 +1342,7 @@ def upload():
                     409,
                 )
             raise
+        auto_session_name = _maybe_auto_title_session_from_filename(session_id, original_filename)
         Thread(
             target=index_source_bg,
             args=(session_id, source_id, combined),
@@ -1282,6 +1354,7 @@ def upload():
                 "source_id": source_id,
                 "text": combined,
                 "truncated": truncated,
+                "session_name": auto_session_name,
                 "indexing": {"status": "pending"},
             }
         )
@@ -1328,6 +1401,7 @@ def upload():
                     409,
                 )
             raise
+        auto_session_name = _maybe_auto_title_session_from_filename(session_id, original_filename)
         Thread(
             target=index_source_bg,
             args=(session_id, source_id, combined),
@@ -1338,6 +1412,7 @@ def upload():
                 "session_id": session_id,
                 "source_id": source_id,
                 "text": combined,
+                "session_name": auto_session_name,
                 "meta": {
                     "pages_total": total_pages,
                     "pages_kept": min(total_pages, MAX_PDF_PAGES),

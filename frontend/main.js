@@ -13,7 +13,9 @@ function resolveApiBase() {
 
 const API_BASE = resolveApiBase();
 const SELECTED_KEY = "ai_selected_sources";
+const SESSION_ARCHIVE_KEY = "ai_session_archive";
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const SESSION_NAME_MAX_LEN = 120;
 
 function loadSelected() {
   try { return new Set(JSON.parse(localStorage.getItem(SELECTED_KEY) || "[]")); }
@@ -42,6 +44,123 @@ function escapeHtml(s) {
   return (s || "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+function normalizeSessionTitle(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, SESSION_NAME_MAX_LEN);
+}
+
+function getSessionRawName(session) {
+  return normalizeSessionTitle(session?.name ?? "");
+}
+
+function getSessionDisplayName(session) {
+  const title = getSessionRawName(session);
+  const fallbackId = String(session?.session_id || "").trim();
+  if (title && title !== fallbackId) return title;
+  return "Untitled chat";
+}
+
+function hasCustomSessionTitle(session) {
+  const title = getSessionRawName(session);
+  const fallbackId = String(session?.session_id || "").trim();
+  return !!title && title !== fallbackId;
+}
+
+function getSessionTitleInputValue(session) {
+  return hasCustomSessionTitle(session) ? getSessionRawName(session) : "";
+}
+
+function getSafeSessionId(value) {
+  const id = String(value || "").trim();
+  return SESSION_ID_RE.test(id) && id !== "local" ? id : "";
+}
+
+function normalizeSessionRecord(session) {
+  const id = getSafeSessionId(session?.session_id);
+  if (!id) return null;
+
+  return {
+    session_id: id,
+    name: normalizeSessionTitle(session?.name ?? ""),
+    created_at: Number(session?.created_at || 0),
+    updated_at: Number(session?.updated_at || Math.floor(Date.now() / 1000))
+  };
+}
+
+function mergeSessionLists(...lists) {
+  const merged = new Map();
+
+  lists.flat().forEach((session) => {
+    const next = normalizeSessionRecord(session);
+    if (!next) return;
+
+    const prev = merged.get(next.session_id);
+    merged.set(next.session_id, {
+      session_id: next.session_id,
+      name: next.name || prev?.name || "",
+      created_at: next.created_at || prev?.created_at || 0,
+      updated_at: Math.max(next.updated_at || 0, prev?.updated_at || 0)
+    });
+  });
+
+  return Array.from(merged.values())
+    .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+}
+
+function loadSessionArchive() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_ARCHIVE_KEY) || "[]");
+    return Array.isArray(parsed) ? mergeSessionLists(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessionArchive(list) {
+  localStorage.setItem(SESSION_ARCHIVE_KEY, JSON.stringify(mergeSessionLists(list)));
+}
+
+function rememberSession(session) {
+  const merged = mergeSessionLists(loadSessionArchive(), [session]);
+  saveSessionArchive(merged);
+  return merged;
+}
+
+function forgetSession(sessionIdToRemove) {
+  const keep = loadSessionArchive()
+    .filter((session) => session.session_id !== sessionIdToRemove);
+  saveSessionArchive(keep);
+  return keep;
+}
+
+function generateSessionId() {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const token = window.crypto?.randomUUID
+      ? window.crypto.randomUUID().replace(/-/g, "")
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+    const candidate = `chat_${token}`.slice(0, 40);
+    if (SESSION_ID_RE.test(candidate)) return candidate;
+  }
+
+  return `chat_${Date.now().toString(36)}`;
+}
+
+function initializeSessionId() {
+  const stored = getSafeSessionId(localStorage.getItem("session_id"));
+  if (stored) {
+    rememberSession({ session_id: stored });
+    return stored;
+  }
+
+  const generated = generateSessionId();
+  localStorage.setItem("session_id", generated);
+  saveSelected(new Set());
+  rememberSession({ session_id: generated });
+  return generated;
 }
 
 let score = { correct: 0, answered: 0, total: 0 };
@@ -436,7 +555,7 @@ function renderPretty(container, jsonObj, opts = {}) {
   container.innerHTML = `<pre>${escapeHtml(JSON.stringify(jsonObj, null, 2))}</pre>`;
 }
 
-let sessionId = localStorage.getItem("session_id") || "local";
+let sessionId = initializeSessionId();
 
 function withSession(headers = {}) {
   return { ...headers, "X-Session-Id": sessionId };
@@ -576,10 +695,11 @@ window.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll(".session-actions-menu.open").forEach((menu) => {
       if (exceptMenu && menu === exceptMenu) return;
       menu.classList.remove("open");
+      menu.closest(".session-item")?.classList.remove("actions-open");
     });
 
     document.querySelectorAll(".session-item-trigger[aria-expanded='true']").forEach((btn) => {
-      if (exceptMenu && btn.nextElementSibling === exceptMenu) return;
+      if (exceptMenu && btn._sessionMenu === exceptMenu) return;
       btn.setAttribute("aria-expanded", "false");
     });
   }
@@ -703,16 +823,53 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function getSessionDisplayName(session) {
-    const raw = String(session?.name || session?.session_id || "").trim();
-    if (!raw) return "Untitled chat";
-    return raw;
-  }
-
   function syncCurrentSessionLabel() {
     if (!currentSessionLabelEl) return;
     const current = sessionsCache.find((session) => session.session_id === sessionId);
     currentSessionLabelEl.textContent = getSessionDisplayName(current || { session_id: sessionId });
+  }
+
+  async function updateSessionDisplayName(targetSessionId, title) {
+    const normalizedTitle = normalizeSessionTitle(title);
+    const data = await apiFetchJson("/sessions/set-name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: targetSessionId,
+        name: normalizedTitle
+      })
+    });
+
+    rememberSession({ session_id: targetSessionId, name: data.name ?? normalizedTitle });
+    await loadSessions();
+    return normalizeSessionTitle(data.name ?? normalizedTitle);
+  }
+
+  async function createSession(displayTitle = "") {
+    let nextSessionId = generateSessionId();
+    while (sessionsCache.some((session) => session.session_id === nextSessionId)) {
+      nextSessionId = generateSessionId();
+    }
+
+    const normalizedTitle = normalizeSessionTitle(displayTitle);
+    await apiFetchJson("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: nextSessionId, name: normalizedTitle })
+    });
+
+    sessionId = nextSessionId;
+    localStorage.setItem("session_id", sessionId);
+    rememberSession({ session_id: sessionId, name: normalizedTitle });
+    selected.clear();
+    saveSelected(selected);
+    updateSelectedInfo();
+    syncCurrentSessionLabel();
+    closeSidebar();
+
+    await loadSessions();
+    await refreshSources();
+    return nextSessionId;
   }
 
   function renderSessionList() {
@@ -722,7 +879,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (sessionCountEl) sessionCountEl.textContent = String(sessionsCache.length);
 
-    const savedCount = sessionsCache.filter((session) => session.session_id !== "local").length;
+    const savedCount = sessionsCache.length;
     if (sessionArchiveHintEl) {
       sessionArchiveHintEl.textContent = savedCount
         ? ""
@@ -753,7 +910,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
       const meta = document.createElement("span");
       meta.className = "session-item-meta";
-      meta.textContent = session.session_id === "local" ? "Local default session" : session.session_id;
+      meta.textContent = hasCustomSessionTitle(session) ? session.session_id : "No custom title yet";
 
       mainBtn.appendChild(title);
       mainBtn.appendChild(meta);
@@ -766,6 +923,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
         sessionId = session.session_id;
         localStorage.setItem("session_id", sessionId);
+        rememberSession(session);
         selected.clear();
         saveSelected(selected);
         updateSelectedInfo();
@@ -788,55 +946,40 @@ window.addEventListener("DOMContentLoaded", () => {
 
       const menu = document.createElement("div");
       menu.className = "session-actions-menu";
+      trigger._sessionMenu = menu;
 
       const renameBtn = document.createElement("button");
       renameBtn.type = "button";
       renameBtn.className = "session-menu-item";
-      renameBtn.textContent = "Rename";
+      renameBtn.textContent = "Edit title";
       renameBtn.addEventListener("click", async () => {
         closeSessionActionMenus();
 
         const result = await openModal({
-          title: "Rename conversation",
-          message: `Rename "${session.session_id}".`,
-          confirmLabel: "Save",
+          title: "Edit conversation title",
+          message: "Change the display title for this chat. Leave it blank to use the default title behavior.",
+          confirmLabel: "Save title",
           input: {
-            label: "Session ID",
-            value: session.session_id,
-            placeholder: "letters, numbers, _ or -",
-            help: "Use 1-40 letters, numbers, underscores, or hyphens.",
-            required: true,
-            requiredMessage: "Session ID is required.",
-            validate: (value) => (
-              SESSION_ID_RE.test(value)
-                ? ""
-                : "Use 1-40 letters, numbers, underscores, or hyphens only."
-            )
+            label: "Display title",
+            value: getSessionTitleInputValue(session),
+            placeholder: "e.g. Chapter 5 Review",
+            maxLength: SESSION_NAME_MAX_LEN,
+            help: "Free text is allowed. This changes only the visible chat title."
           }
         });
 
         if (!result.confirmed) return;
 
         try {
-          await apiFetchJson("/sessions/rename", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ from: session.session_id, to: result.value })
-          });
-
-          if (session.session_id === sessionId) {
-            sessionId = result.value;
-            localStorage.setItem("session_id", sessionId);
-            syncCurrentSessionLabel();
-          }
-
-          setText(statusEl, `Session renamed to: ${result.value}`);
-          await loadSessions();
-          if (session.session_id === sessionId || result.value === sessionId) {
-            await refreshSources();
-          }
+          const savedTitle = await updateSessionDisplayName(session.session_id, result.value);
+          setText(
+            statusEl,
+            savedTitle
+              ? `Conversation title updated: ${savedTitle}`
+              : "Conversation title cleared."
+          );
         } catch (e) {
-          setText(statusEl, `Rename failed: ${e.message}`);
+          setText(statusEl, `Update title failed: ${e.message}`);
         }
       });
 
@@ -865,9 +1008,11 @@ window.addEventListener("DOMContentLoaded", () => {
             });
 
             const wasCurrent = session.session_id === sessionId;
+            forgetSession(session.session_id);
             if (wasCurrent) {
-              sessionId = "local";
+              sessionId = generateSessionId();
               localStorage.setItem("session_id", sessionId);
+              rememberSession({ session_id: sessionId });
               selected.clear();
               saveSelected(selected);
               updateSelectedInfo();
@@ -892,14 +1037,15 @@ window.addEventListener("DOMContentLoaded", () => {
         const willOpen = !menu.classList.contains("open");
         closeSessionActionMenus();
         menu.classList.toggle("open", willOpen);
+        item.classList.toggle("actions-open", willOpen);
         trigger.setAttribute("aria-expanded", String(willOpen));
       });
 
       actions.appendChild(trigger);
-      actions.appendChild(menu);
 
       item.appendChild(mainBtn);
       item.appendChild(actions);
+      item.appendChild(menu);
       sessionListEl.appendChild(item);
     });
 
@@ -1263,51 +1409,16 @@ window.addEventListener("DOMContentLoaded", () => {
   async function loadSessions() {
     try {
       const data = await apiFetchJson("/sessions", { method: "GET" });
-      const seen = new Set();
-      const list = [];
-
-      (data.sessions || []).forEach((session) => {
-        const id = String(session.session_id || "").trim();
-        if (!id || seen.has(id)) return;
-
-        seen.add(id);
-        list.push({
-          session_id: id,
-          name: String(session.name || id).trim() || id,
-          created_at: session.created_at || 0,
-          updated_at: session.updated_at || 0
-        });
-      });
-
-      if (!seen.has("local")) {
-        list.push({
-          session_id: "local",
-          name: "Local chat",
-          created_at: 0,
-          updated_at: 0
-        });
-      }
-
-      if (!seen.has(sessionId)) {
-        list.unshift({
-          session_id: sessionId,
-          name: sessionId === "local" ? "Local chat" : sessionId,
-          created_at: 0,
-          updated_at: 0
-        });
-      }
-
-      sessionsCache = list;
+      sessionsCache = mergeSessionLists(
+        loadSessionArchive(),
+        data.sessions || [],
+        [{ session_id: sessionId }]
+      );
+      saveSessionArchive(sessionsCache);
       renderSessionList();
     } catch (e) {
-      sessionsCache = [
-        {
-          session_id: sessionId,
-          name: sessionId === "local" ? "Local chat" : sessionId,
-          created_at: 0,
-          updated_at: 0
-        }
-      ];
+      sessionsCache = mergeSessionLists(loadSessionArchive(), [{ session_id: sessionId }]);
+      saveSessionArchive(sessionsCache);
       renderSessionList();
       setText(statusEl, `Load sessions failed: ${e.message}`);
     }
@@ -1484,7 +1595,14 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       fileEl.value = "";
-      setText(statusEl, `Uploaded: ${newId || f.name}`);
+      const autoSessionName = normalizeSessionTitle(data.session_name || "");
+      setText(
+        statusEl,
+        autoSessionName
+          ? `Uploaded: ${newId || f.name}. Chat title set to "${autoSessionName}".`
+          : `Uploaded: ${newId || f.name}`
+      );
+      await loadSessions();
       await refreshSources();
     } catch (e) {
       fileEl.value = "";
@@ -1609,45 +1727,29 @@ window.addEventListener("DOMContentLoaded", () => {
 
   newSessionBtn?.addEventListener("click", async () => {
     const result = await openModal({
-      title: "Create conversation",
-      message: "Create a new conversation archive using a session ID.",
+      title: "Create new chat",
+      message: "Create a new chat with an internal ID generated automatically. You can add a display title now or let the first uploaded file title it later.",
       confirmLabel: "Create",
       input: {
-        label: "Session ID",
+        label: "Display title",
         value: "",
-        placeholder: "letters, numbers, _ or -",
-        help: "Use 1-40 letters, numbers, underscores, or hyphens.",
-        required: true,
-        requiredMessage: "Session ID is required.",
-        validate: (value) => (
-          SESSION_ID_RE.test(value)
-            ? ""
-            : "Use 1-40 letters, numbers, underscores, or hyphens only."
-        )
+        placeholder: "e.g. Midterm review",
+        maxLength: SESSION_NAME_MAX_LEN,
+        help: "Optional. Leave blank to auto-title this chat from the first uploaded file."
       }
     });
     if (!result.confirmed) return;
 
     try {
-      await apiFetchJson("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: result.value, name: result.value })
-      });
-
-      sessionId = result.value;
-      localStorage.setItem("session_id", sessionId);
-      selected.clear();
-      saveSelected(selected);
-      updateSelectedInfo();
-      syncCurrentSessionLabel();
-      closeSidebar();
-
-      setText(statusEl, `Session created: ${result.value}`);
-      await loadSessions();
-      await refreshSources();
+      await createSession(result.value);
+      setText(
+        statusEl,
+        normalizeSessionTitle(result.value)
+          ? `Chat created: ${normalizeSessionTitle(result.value)}`
+          : "Chat created. Upload a file to auto-title it."
+      );
     } catch (e) {
-      setText(statusEl, `Create session failed: ${e.message}`);
+      setText(statusEl, `Create chat failed: ${e.message}`);
     }
   });
 
