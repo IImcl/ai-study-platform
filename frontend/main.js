@@ -165,6 +165,8 @@ function initializeSessionId() {
 
 let score = { correct: 0, answered: 0, total: 0 };
 let scoreBoxEl = null;
+let examTimerId = null;
+let examEndsAt = 0;
 
 function updateScoreUI() {
   if (!scoreBoxEl) return;
@@ -242,22 +244,127 @@ function _keywordMatch(userText, expectedText, minMatch = 3) {
 
 let examFinished = false;
 
-function finishExam() {
+function formatDuration(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const mins = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function getExamDurationSeconds(totalQuestions) {
+  const perQuestion = Math.max(1, Number(totalQuestions) || 0) * 60;
+  return Math.max(5 * 60, Math.min(50 * 60, perQuestion));
+}
+
+function setExamTimerVisible(visible) {
+  const el = document.getElementById("examTimer");
+  if (el) el.style.display = visible ? "" : "none";
+}
+
+function setExamTimerText(text, urgent = false) {
+  const el = document.getElementById("examTimer");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("urgent", urgent);
+}
+
+function stopExamTimer() {
+  if (examTimerId) clearInterval(examTimerId);
+  examTimerId = null;
+  examEndsAt = 0;
+}
+
+function updateExamTimer() {
+  if (!examEndsAt || examFinished) return;
+
+  const remaining = Math.max(0, Math.ceil((examEndsAt - Date.now()) / 1000));
+  setExamTimerText(`Time: ${formatDuration(remaining)}`, remaining <= 60);
+
+  if (remaining <= 0) {
+    finishExam("timeout");
+  }
+}
+
+function startExamTimer(totalQuestions, restart = false) {
+  if (examFinished) return;
+  setExamTimerVisible(true);
+
+  if (examTimerId && !restart) {
+    updateExamTimer();
+    return;
+  }
+
+  stopExamTimer();
+  examEndsAt = Date.now() + getExamDurationSeconds(totalQuestions) * 1000;
+  updateExamTimer();
+  examTimerId = window.setInterval(updateExamTimer, 1000);
+}
+
+function revealFinishedExam() {
+  document.querySelectorAll('[data-exam-card="1"]').forEach((card) => {
+    const feedback = card.querySelector(".mcq-feedback");
+    const type = card.dataset.questionType || "";
+
+    if (type === "mcq") {
+      const correctLetter = (card.dataset.correctLetter || "").toUpperCase();
+      const selectedLetter = (card.dataset.selectedLetter || "").toUpperCase();
+      const answerIsMissing = card.dataset.answerMissing === "1";
+
+      card.querySelectorAll(".mcq-choice").forEach((line) => {
+        const ltr = (line.dataset.letter || "").toUpperCase();
+        line.classList.remove("selected");
+        if (correctLetter && ltr === correctLetter) line.classList.add("correct");
+        if (selectedLetter && ltr === selectedLetter && selectedLetter !== correctLetter) {
+          line.classList.add("wrong");
+        }
+      });
+
+      if (feedback) {
+        if (answerIsMissing) {
+          feedback.textContent = "No supported answer in sources (NOT_IN_SOURCES).";
+        } else if (!selectedLetter) {
+          feedback.textContent = correctLetter ? `Not answered. Correct: ${correctLetter}.` : "Not answered.";
+        } else if (selectedLetter === correctLetter) {
+          feedback.textContent = "Correct.";
+        } else {
+          feedback.textContent = correctLetter ? `Wrong. Correct: ${correctLetter}.` : "Wrong.";
+        }
+      }
+    }
+
+    if (type === "short" && feedback) {
+      if (card.dataset.answered !== "1") {
+        feedback.textContent = "Not answered. Review the answer below.";
+      } else if (card.dataset.shortOk === "1") {
+        feedback.textContent = "Correct.";
+      } else {
+        feedback.textContent = "Not marked correct. Review the answer below.";
+      }
+    }
+  });
+}
+
+function finishExam(reason = "manual") {
+  if (examFinished) return;
   examFinished = true;
+  stopExamTimer();
+  setExamTimerVisible(true);
+  setExamTimerText(reason === "timeout" ? "Time: 00:00" : "Exam finished.", reason === "timeout");
 
   document.querySelectorAll('.mcq-choice input[type="radio"]').forEach(el => { el.disabled = true; });
   document.querySelectorAll('.short-input').forEach(el => { el.disabled = true; });
   document.querySelectorAll('.short-check').forEach(el => { el.disabled = true; });
+  revealFinishedExam();
 
   document.querySelectorAll("details").forEach(d => {
     d.style.display = "";
-    d.open = false;
+    d.open = true;
   });
 
   const banner = document.getElementById("finalBanner") || document.createElement("div");
   banner.id = "finalBanner";
   banner.className = "final-banner";
-  banner.textContent = `Finished. Score: ${score.correct}/${score.answered} (Total: ${score.total})`;
+  banner.textContent = `${reason === "timeout" ? "Time is up." : "Finished."} Final score: ${score.correct}/${score.total}. Answered: ${score.answered}/${score.total}.`;
 
   const out = document.getElementById("outPretty");
   if (out && !document.getElementById("finalBanner")) out.prepend(banner);
@@ -293,6 +400,7 @@ function renderPretty(container, jsonObj, opts = {}) {
       card.style.padding = "12px";
       card.style.margin = "10px 0";
       card.style.borderRadius = "10px";
+      if (examOn) card.dataset.examCard = "1";
 
       const title = document.createElement("div");
       title.innerHTML = `<b>Q${idx + 1}</b> <span style="padding:2px 8px;border:1px solid var(--border);border-radius:10px;margin-left:6px">${escapeHtml(it.type || "")}</span>`;
@@ -335,6 +443,11 @@ function renderPretty(container, jsonObj, opts = {}) {
       if (isMcq) {
         const correctLetter = normalizeAnswerLetter(it.answer);
         const answerIsMissing = !correctLetter || String(it.answer || "").trim() === "NOT_IN_SOURCES";
+        if (examOn) {
+          card.dataset.questionType = "mcq";
+          card.dataset.correctLetter = correctLetter;
+          card.dataset.answerMissing = answerIsMissing ? "1" : "0";
+        }
 
         const hint = document.createElement("div");
         hint.className = "mcq-feedback muted";
@@ -361,8 +474,19 @@ function renderPretty(container, jsonObj, opts = {}) {
 
             // lock all options (one click only)
             card.querySelectorAll(`input[name="q_${idx}"]`).forEach(x => { x.disabled = true; });
+            const selectedLetter = letter;
+            card.dataset.answered = "1";
+            card.dataset.selectedLetter = selectedLetter;
 
             if (answerIsMissing) {
+              if (examOn) {
+                line.classList.add("selected");
+                score.answered += 1;
+                updateScoreUI();
+                hint.textContent = "Answer recorded. Results unlock when the exam is finished.";
+                return;
+              }
+
               hint.textContent = t(
                 "No supported answer in sources (NOT_IN_SOURCES).",
                 "لا يوجد جواب مدعوم في المصادر (NOT_IN_SOURCES).",
@@ -375,15 +499,27 @@ function renderPretty(container, jsonObj, opts = {}) {
               return;
             }
 
+            const ok = selectedLetter === correctLetter;
+            if (examOn) {
+              line.classList.add("selected");
+              score.answered += 1;
+              if (ok) score.correct += 1;
+              updateScoreUI();
+              hint.textContent = t(
+                "Answer recorded. Results unlock when the exam is finished.",
+                "Answer recorded. Results unlock when the exam is finished.",
+                "Answer recorded. Results unlock when the exam is finished."
+              );
+              return;
+            }
+
             // highlight correct + selected
-            const selectedLetter = letter;
             card.querySelectorAll(".mcq-choice").forEach(l => {
               const ltr = (l.dataset.letter || "").toUpperCase();
               if (ltr === correctLetter) l.classList.add("correct");
               if (ltr === selectedLetter && selectedLetter !== correctLetter) l.classList.add("wrong");
             });
 
-            const ok = selectedLetter === correctLetter;
             hint.textContent = ok
               ? t("✅ Correct.", "✅ صح.", "✅ Doğru.")
               : t(
@@ -391,12 +527,6 @@ function renderPretty(container, jsonObj, opts = {}) {
                   `❌ غلط. الصحيح: ${correctLetter}.`,
                   `❌ Yanlış. Doğru: ${correctLetter}.`
                 );
-
-            if (examOn) {
-              score.answered += 1;
-              if (ok) score.correct += 1;
-              updateScoreUI();
-            }
 
             if (detailsEl) {
               detailsEl.style.display = "";
@@ -409,6 +539,8 @@ function renderPretty(container, jsonObj, opts = {}) {
 
         makeDetails();
       } else {
+        if (examOn) card.dataset.questionType = "short";
+
         // If model claims MCQ but did not provide choices, show a warning.
         if ((it.type || "").toLowerCase() === "mcq") {
           const warn = document.createElement("div");
@@ -458,6 +590,14 @@ function renderPretty(container, jsonObj, opts = {}) {
           const userAns = String(inp.value || "").trim();
 
           if (!expected || expected === "NOT_IN_SOURCES") {
+            if (examOn) {
+              card.dataset.answered = "1";
+              score.answered += 1;
+              updateScoreUI();
+              fb.textContent = "Answer recorded. Results unlock when the exam is finished.";
+              return;
+            }
+
             fb.textContent = t(
               "No supported answer in sources (NOT_IN_SOURCES).",
               "لا يوجد جواب مدعوم في المصادر (NOT_IN_SOURCES).",
@@ -470,6 +610,16 @@ function renderPretty(container, jsonObj, opts = {}) {
           const minMatch = 3;
           const res = _keywordMatch(userAns, expected);
           const ok = res.ok;
+
+          if (examOn) {
+            card.dataset.answered = "1";
+            card.dataset.shortOk = ok ? "1" : "0";
+            score.answered += 1;
+            if (ok) score.correct += 1;
+            updateScoreUI();
+            fb.textContent = "Answer recorded. Results unlock when the exam is finished.";
+            return;
+          }
 
           fb.textContent = ok
             ? t(
@@ -655,6 +805,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const modalCancelBtn = document.getElementById("modalCancel");
   const modalConfirmBtn = document.getElementById("modalConfirm");
   const themeBtn = document.getElementById("themeToggle");
+  const helpFabBtn = document.getElementById("helpFab");
+  const scrollTopBtn = document.getElementById("scrollTop");
 
   let lastRaw = "";
   let selected = loadSelected();
@@ -704,18 +856,71 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function openSidebar() {
-    if (!sidebarEl || !sidebarBackdropEl) return;
-    sidebarEl.classList.add("open");
-    sidebarBackdropEl.classList.add("open");
-    document.body.classList.add("sidebar-open");
+  function isSidebarOpen() {
+    if (!sidebarEl) return false;
+    if (isMobileSidebarMode()) return sidebarEl.classList.contains("open");
+    return !document.body.classList.contains("sidebar-collapsed");
   }
 
-  function closeSidebar() {
+  function isMobileSidebarMode() {
+    return window.matchMedia("(max-width: 980px)").matches;
+  }
+
+  function syncSidebarA11y() {
+    if (!sidebarEl) return;
+    const expanded = isSidebarOpen();
+    sidebarToggleBtn?.setAttribute("aria-expanded", String(expanded));
+    sidebarToggleBtn?.setAttribute("aria-label", expanded ? "Close conversations" : "Open conversations");
+    sidebarToggleBtn?.setAttribute("title", expanded ? "Close conversations" : "Open conversations");
+    sidebarEl.setAttribute("aria-hidden", String(!expanded));
+  }
+
+  function openSidebar() {
+    if (!sidebarEl || !sidebarBackdropEl) return;
+    closeDownloadMenu();
+    closeCustomSelectMenus();
+    closeSessionActionMenus();
+    document.body.classList.remove("sidebar-collapsed");
+    if (isMobileSidebarMode()) {
+      sidebarEl.classList.add("open");
+      sidebarBackdropEl.classList.add("open");
+      document.body.classList.add("sidebar-open");
+    } else {
+      sidebarEl.classList.remove("open");
+      sidebarBackdropEl.classList.remove("open");
+      document.body.classList.remove("sidebar-open");
+    }
+    syncSidebarA11y();
+  }
+
+  function closeSidebar({ collapseDesktop = false } = {}) {
     if (!sidebarEl || !sidebarBackdropEl) return;
     sidebarEl.classList.remove("open");
     sidebarBackdropEl.classList.remove("open");
     document.body.classList.remove("sidebar-open");
+    if (!isMobileSidebarMode() && collapseDesktop) document.body.classList.add("sidebar-collapsed");
+    syncSidebarA11y();
+  }
+
+  function toggleSidebar() {
+    if (isSidebarOpen()) closeSidebar({ collapseDesktop: true });
+    else openSidebar();
+  }
+
+  function syncScrollTopButton() {
+    if (!scrollTopBtn) return;
+    scrollTopBtn.classList.toggle("visible", window.scrollY > 420);
+  }
+
+  function handleViewportChange() {
+    if (!isMobileSidebarMode()) {
+      sidebarEl?.classList.remove("open");
+      sidebarBackdropEl?.classList.remove("open");
+      document.body.classList.remove("sidebar-open");
+    } else {
+      document.body.classList.remove("sidebar-collapsed");
+    }
+    syncSidebarA11y();
   }
 
   function setModalError(message = "") {
@@ -734,6 +939,11 @@ window.addEventListener("DOMContentLoaded", () => {
     modalEl.setAttribute("aria-hidden", "true");
     document.body.classList.remove("modal-open");
     modalConfirmBtn?.classList.remove("button-danger");
+    if (modalCancelBtn) modalCancelBtn.hidden = false;
+    if (modalFieldWrapEl) {
+      modalFieldWrapEl.hidden = true;
+      modalFieldWrapEl.style.display = "none";
+    }
     setModalError("");
 
     if (resolve) resolve(result);
@@ -771,6 +981,7 @@ window.addEventListener("DOMContentLoaded", () => {
     confirmLabel = "Confirm",
     cancelLabel = "Cancel",
     danger = false,
+    hideCancel = false,
     input = null
   }) {
     if (!modalEl) return Promise.resolve({ confirmed: false, value: "" });
@@ -785,6 +996,7 @@ window.addEventListener("DOMContentLoaded", () => {
     modalMessageEl.textContent = message || "";
     modalMessageEl.hidden = !message;
     modalCancelBtn.textContent = cancelLabel;
+    modalCancelBtn.hidden = !!hideCancel;
     modalConfirmBtn.textContent = confirmLabel;
     modalConfirmBtn.classList.toggle("button-danger", !!danger);
 
@@ -792,6 +1004,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (input) {
       modalFieldWrapEl.hidden = false;
+      modalFieldWrapEl.style.display = "";
       modalInputLabelEl.textContent = input.label || "Value";
       modalInputEl.value = input.value || "";
       modalInputEl.placeholder = input.placeholder || "";
@@ -800,7 +1013,10 @@ window.addEventListener("DOMContentLoaded", () => {
       modalHelpEl.hidden = !modalHelpEl.textContent;
     } else {
       modalFieldWrapEl.hidden = true;
+      modalFieldWrapEl.style.display = "none";
+      modalInputLabelEl.textContent = "";
       modalInputEl.value = "";
+      modalInputEl.placeholder = "";
       modalHelpEl.textContent = "";
       modalHelpEl.hidden = true;
     }
@@ -1143,6 +1359,7 @@ window.addEventListener("DOMContentLoaded", () => {
       const examOn = !!(examModeEl && examModeEl.checked);
       const showKey = !!(showAnswerKeyEl && showAnswerKeyEl.checked) && !examOn;
       renderPretty(outPretty, parsed, { showKey, examOn });
+      if (examOn && !examFinished) startExamTimer(score.total || (Array.isArray(parsed.items) ? parsed.items.length : 0));
     } catch {
       // ignore rerender errors
     }
@@ -1170,17 +1387,41 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  sidebarToggleBtn?.addEventListener("click", () => {
-    openSidebar();
+  syncSidebarA11y();
+
+  sidebarToggleBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleSidebar();
   });
 
-  sidebarCloseBtn?.addEventListener("click", () => {
+  sidebarCloseBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeSidebar({ collapseDesktop: true });
+  });
+
+  sidebarBackdropEl?.addEventListener("click", (e) => {
+    e.preventDefault();
     closeSidebar();
   });
 
-  sidebarBackdropEl?.addEventListener("click", () => {
-    closeSidebar();
+  scrollTopBtn?.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
+
+  helpFabBtn?.addEventListener("click", () => {
+    openModal({
+      title: "How to use this study tool",
+      message: "1. Upload a PDF/TXT file or paste a manual source.\n2. Select one or more ready sources.\n3. Choose quiz, flashcards, or tricky questions.\n4. Use Focus Query to stay on one topic.\n5. Turn on Exam Mode before Generate for a timed attempt.",
+      confirmLabel: "Got it",
+      hideCancel: true
+    });
+  });
+
+  window.addEventListener("scroll", syncScrollTopButton, { passive: true });
+  window.addEventListener("resize", handleViewportChange);
+  syncScrollTopButton();
 
   modalCancelBtn?.addEventListener("click", () => {
     closeModal();
@@ -1206,7 +1447,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   if (resetScoreBtn) resetScoreBtn.addEventListener("click", resetScore);
-  if (finishExamBtn) finishExamBtn.addEventListener("click", finishExam);
+  if (finishExamBtn) finishExamBtn.addEventListener("click", () => finishExam());
 
   if (examModeEl) {
     examModeEl.addEventListener("change", () => {
@@ -1218,11 +1459,30 @@ window.addEventListener("DOMContentLoaded", () => {
         showAnswerKeyEl.disabled = on;
       }
       if (scoreBoxEl) scoreBoxEl.style.display = on ? "" : "none";
+      setExamTimerVisible(on);
       if (resetScoreBtn) resetScoreBtn.style.display = on ? "" : "none";
       if (finishExamBtn) finishExamBtn.style.display = on ? "" : "none";
       examFinished = false;
+      if (!on) {
+        stopExamTimer();
+        setExamTimerText("Time: --:--", false);
+      }
       updateScoreUI();
       rerenderLastPretty();
+      if (on && lastRaw) {
+        try {
+          const parsed = JSON.parse(lastRaw);
+          score.total = Array.isArray(parsed.items) ? parsed.items.length : 0;
+          score.correct = 0;
+          score.answered = 0;
+          const banner = document.getElementById("finalBanner");
+          if (banner) banner.remove();
+          updateScoreUI();
+          startExamTimer(score.total, true);
+        } catch {
+          // ignore exam timer start errors
+        }
+      }
     });
   }
 
@@ -1246,6 +1506,10 @@ window.addEventListener("DOMContentLoaded", () => {
         const showKey = !!(showAnswerKeyEl && showAnswerKeyEl.checked) && !examOn;
         setText(outRaw, "");
         renderPretty(outPretty, parsed, { showKey, examOn });
+        if (examOn && !examFinished) {
+          score.total = Array.isArray(parsed.items) ? parsed.items.length : score.total;
+          startExamTimer(score.total);
+        }
       } catch {
         showRawOutput(lastRaw);
       }
@@ -1327,6 +1591,7 @@ window.addEventListener("DOMContentLoaded", () => {
       list.forEach((s) => {
         const row = document.createElement("div");
         row.className = "item";
+        row.classList.toggle("selected", selected.has(s.source_id));
 
         const cb = document.createElement("input");
         cb.type = "checkbox";
@@ -1334,11 +1599,13 @@ window.addEventListener("DOMContentLoaded", () => {
         cb.addEventListener("change", () => {
           if (cb.checked) selected.add(s.source_id);
           else selected.delete(s.source_id);
+          row.classList.toggle("selected", cb.checked);
           saveSelected(selected);
           updateSelectedInfo();
         });
 
         const label = document.createElement("div");
+        label.className = "source-details";
         const statusColor = (s.status === "ready") ? "green" : (s.status === "failed" ? "#b00" : "#c90");
         const prog = (s.pages_total && s.pages_total > 0)
           ? ` (${s.pages_done || 0}/${s.pages_total})`
@@ -1359,6 +1626,7 @@ window.addEventListener("DOMContentLoaded", () => {
         `;
 
         const delBtn = document.createElement("button");
+        delBtn.className = "source-delete";
         delBtn.textContent = "Delete";
         delBtn.addEventListener("click", async () => {
           const result = await openModal({
@@ -1476,6 +1744,8 @@ window.addEventListener("DOMContentLoaded", () => {
     outPretty.innerHTML = "";
     setText(outRaw, "");
     lastRaw = "";
+    stopExamTimer();
+    setExamTimerText("Time: --:--", false);
     syncOutputView();
 
     const sourceIds = Array.from(selected);
@@ -1559,6 +1829,7 @@ window.addEventListener("DOMContentLoaded", () => {
         updateScoreUI();
 
         renderPretty(outPretty, parsed, { showKey, examOn });
+        if (examOn) startExamTimer(score.total, true);
         syncOutputView();
       } catch {
         outPretty.innerHTML = "";
