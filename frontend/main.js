@@ -13,7 +13,8 @@ function resolveApiBase() {
 
 const API_BASE = resolveApiBase();
 const SELECTED_KEY = "ai_selected_sources";
-const SESSION_ARCHIVE_KEY = "ai_session_archive";
+const BROWSER_ID_KEY = "ai_private_browser_id";
+const SESSION_ARCHIVE_PREFIX = "ai_private_session_archive:";
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const SESSION_NAME_MAX_LEN = 120;
 
@@ -78,6 +79,17 @@ function getSafeSessionId(value) {
   const id = String(value || "").trim();
   return SESSION_ID_RE.test(id) && id !== "local" ? id : "";
 }
+
+function initializeBrowserId() {
+  const stored = getSafeSessionId(localStorage.getItem(BROWSER_ID_KEY));
+  if (stored) return stored;
+
+  const generated = generateSessionId();
+  localStorage.setItem(BROWSER_ID_KEY, generated);
+  return generated;
+}
+
+const SESSION_ARCHIVE_KEY = `${SESSION_ARCHIVE_PREFIX}${initializeBrowserId()}`;
 
 function normalizeSessionRecord(session) {
   const id = getSafeSessionId(session?.session_id);
@@ -707,13 +719,17 @@ function renderPretty(container, jsonObj, opts = {}) {
 
 let sessionId = initializeSessionId();
 
-function withSession(headers = {}) {
-  return { ...headers, "X-Session-Id": sessionId };
+function withSession(headers = {}, requestSessionId = sessionId) {
+  return { ...headers, "X-Session-Id": requestSessionId };
 }
 
 async function apiFetch(path, options = {}) {
-  const headers = options.headers ? { ...options.headers } : {};
-  return fetch(`${API_BASE}${path}`, { ...options, headers: withSession(headers) });
+  const { sessionOverride, ...fetchOptions } = options;
+  const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
+  return fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers: withSession(headers, sessionOverride || sessionId)
+  });
 }
 
 function buildErrorMessage(data, fallback = "Request failed") {
@@ -1049,6 +1065,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const normalizedTitle = normalizeSessionTitle(title);
     const data = await apiFetchJson("/sessions/set-name", {
       method: "POST",
+      sessionOverride: targetSessionId,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: targetSessionId,
@@ -1070,6 +1087,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const normalizedTitle = normalizeSessionTitle(displayTitle);
     await apiFetchJson("/sessions", {
       method: "POST",
+      sessionOverride: nextSessionId,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: nextSessionId, name: normalizedTitle })
     });
@@ -1220,7 +1238,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
           try {
             await apiFetchJson(`/sessions/${encodeURIComponent(session.session_id)}`, {
-              method: "DELETE"
+              method: "DELETE",
+              sessionOverride: session.session_id
             });
 
             const wasCurrent = session.session_id === sessionId;
@@ -1675,21 +1694,9 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function loadSessions() {
-    try {
-      const data = await apiFetchJson("/sessions", { method: "GET" });
-      sessionsCache = mergeSessionLists(
-        loadSessionArchive(),
-        data.sessions || [],
-        [{ session_id: sessionId }]
-      );
-      saveSessionArchive(sessionsCache);
-      renderSessionList();
-    } catch (e) {
-      sessionsCache = mergeSessionLists(loadSessionArchive(), [{ session_id: sessionId }]);
-      saveSessionArchive(sessionsCache);
-      renderSessionList();
-      setText(statusEl, `Load sessions failed: ${e.message}`);
-    }
+    sessionsCache = mergeSessionLists(loadSessionArchive(), [{ session_id: sessionId }]);
+    saveSessionArchive(sessionsCache);
+    renderSessionList();
   }
 
   async function addManualSource() {
@@ -1867,6 +1874,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
       fileEl.value = "";
       const autoSessionName = normalizeSessionTitle(data.session_name || "");
+      rememberSession({ session_id: sessionId, name: autoSessionName });
       setText(
         statusEl,
         autoSessionName

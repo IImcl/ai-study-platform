@@ -713,9 +713,16 @@ def list_sessions():
 @app.post("/sessions")
 def create_session():
     data = request.get_json(force=True, silent=True) or {}
-    sid = (data.get("session_id") or "").strip()
+    current_sid = get_session_id_from_request(request)
+    if not current_sid:
+        return jsonify({"error": "MISSING_OR_INVALID_SESSION_ID"}), 400
+
+    sid = (data.get("session_id") or current_sid).strip()
     if not is_valid_session_id(sid):
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
+    if sid != current_sid:
+        return jsonify({"error": "SESSION_ID_MISMATCH"}), 403
+
     raw_name = data["name"] if "name" in data else sid
     name = _normalize_session_name(raw_name)
     now = int(time.time())
@@ -734,9 +741,15 @@ def create_session():
 @app.post("/sessions/set-name")
 def set_session_name():
     data = request.get_json(force=True, silent=True) or {}
-    sid = (data.get("session_id") or "").strip()
+    current_sid = get_session_id_from_request(request)
+    if not current_sid:
+        return jsonify({"error": "MISSING_OR_INVALID_SESSION_ID"}), 400
+
+    sid = (data.get("session_id") or current_sid).strip()
     if not is_valid_session_id(sid):
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
+    if sid != current_sid:
+        return jsonify({"error": "SESSION_ID_MISMATCH"}), 403
 
     name = _set_session_name(sid, data.get("name", ""))
     return jsonify({"ok": True, "session_id": sid, "name": name})
@@ -745,11 +758,17 @@ def set_session_name():
 @app.post("/sessions/rename")
 def rename_session():
     data = request.get_json(force=True, silent=True) or {}
+    current_sid = get_session_id_from_request(request)
+    if not current_sid:
+        return jsonify({"error": "MISSING_OR_INVALID_SESSION_ID"}), 400
+
     old = (data.get("from") or "").strip()
     new = (data.get("to") or "").strip()
 
     if not is_valid_session_id(old) or not is_valid_session_id(new):
         return jsonify({"error": "INVALID_SESSION_ID"}), 400
+    if old != current_sid:
+        return jsonify({"error": "SESSION_ID_MISMATCH"}), 403
 
     if old == new:
         return jsonify({"ok": True, "from": old, "to": new, "unchanged": True})
@@ -782,9 +801,16 @@ def rename_session():
 
 @app.delete("/sessions/<sid>")
 def delete_session(sid):
+    current_sid = get_session_id_from_request(request)
+    if not current_sid:
+        return jsonify({"error": "MISSING_OR_INVALID_SESSION_ID"}), 400
+
     sid = (sid or "").strip()
     if not is_valid_session_id(sid):
         return jsonify({"error": "INVALID_OR_PROTECTED_SESSION"}), 400
+    if sid != current_sid:
+        return jsonify({"error": "SESSION_ID_MISMATCH"}), 403
+
     with db() as conn:
         for t in ("sources", "pages", "indexing_status"):
             conn.execute(f"DELETE FROM {t} WHERE session_id=?", (sid,))
