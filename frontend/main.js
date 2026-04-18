@@ -820,6 +820,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const modalErrorEl = document.getElementById("modalError");
   const modalCancelBtn = document.getElementById("modalCancel");
   const modalConfirmBtn = document.getElementById("modalConfirm");
+  const uploadOverlayEl = document.getElementById("uploadOverlay");
+  const uploadOverlayTitleEl = document.getElementById("uploadOverlayTitle");
+  const uploadOverlayDetailEl = document.getElementById("uploadOverlayDetail");
   const themeBtn = document.getElementById("themeToggle");
   const helpFabBtn = document.getElementById("helpFab");
   const scrollTopBtn = document.getElementById("scrollTop");
@@ -828,6 +831,8 @@ window.addEventListener("DOMContentLoaded", () => {
   let selected = loadSelected();
   let sessionsCache = [];
   let modalState = null;
+  let uploadOverlayTimer = null;
+  let uploadWatchToken = 0;
 
   function syncOutputView() {
     const rawMode = viewEl && viewEl.value === "raw";
@@ -963,6 +968,36 @@ window.addEventListener("DOMContentLoaded", () => {
     setModalError("");
 
     if (resolve) resolve(result);
+  }
+
+  function updateUploadOverlay(title, detail, state = "loading") {
+    if (!uploadOverlayEl) return;
+
+    if (uploadOverlayTimer) {
+      clearTimeout(uploadOverlayTimer);
+      uploadOverlayTimer = null;
+    }
+
+    uploadOverlayTitleEl.textContent = title || "Uploading and preparing your source...";
+    uploadOverlayDetailEl.textContent = detail || "Please wait while the file is uploaded and indexed.";
+    uploadOverlayEl.classList.toggle("success", state === "success");
+    uploadOverlayEl.classList.toggle("error", state === "error");
+    uploadOverlayEl.hidden = false;
+    uploadOverlayEl.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+    document.body.classList.add("upload-overlay-open");
+  }
+
+  function hideUploadOverlay(delay = 0) {
+    if (!uploadOverlayEl) return;
+
+    if (uploadOverlayTimer) clearTimeout(uploadOverlayTimer);
+    uploadOverlayTimer = window.setTimeout(() => {
+      uploadOverlayEl.hidden = true;
+      uploadOverlayEl.classList.remove("success", "error");
+      uploadOverlayEl.setAttribute("aria-busy", "false");
+      document.body.classList.remove("upload-overlay-open");
+      uploadOverlayTimer = null;
+    }, delay);
   }
 
   function confirmModalAction() {
@@ -1595,7 +1630,7 @@ window.addEventListener("DOMContentLoaded", () => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         sourcesListEl.innerHTML = `<div style="color:#b00">Error loading sources: ${escapeHtml(JSON.stringify(data))}</div>`;
-        return;
+        return [];
       }
 
       const list = data.sources || [];
@@ -1604,7 +1639,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (list.length === 0) {
         sourcesListEl.innerHTML = `<div class="muted">No stored sources yet. Upload a file or add manual text.</div>`;
         updateSelectedInfo();
-        return;
+        return list;
       }
 
       list.forEach((s) => {
@@ -1688,8 +1723,67 @@ window.addEventListener("DOMContentLoaded", () => {
       if (hasPending) {
         window._pollTimer = setTimeout(refreshSources, 1500);
       }
+      return list;
     } catch (e) {
       sourcesListEl.innerHTML = `<div style="color:#b00">Failed to fetch /sources: ${escapeHtml(String(e))}</div>`;
+      return [];
+    }
+  }
+
+  async function waitForUploadedSourceReady(sourceId, token) {
+    if (!sourceId) {
+      hideUploadOverlay(700);
+      return;
+    }
+
+    updateUploadOverlay(
+      "Indexing source...",
+      "Please wait while the file is indexed and made ready for generation."
+    );
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      if (token !== uploadWatchToken) return;
+
+      const list = await refreshSources();
+      const source = (list || []).find((item) => item.source_id === sourceId);
+      const status = source?.status || "pending";
+      const progress = source?.pages_total
+        ? ` Indexed ${source.pages_done || 0}/${source.pages_total} pages.`
+        : "";
+
+      if (status === "ready") {
+        updateUploadOverlay("Source ready", "Your file is ready to use.", "success");
+        setText(statusEl, `Source ready: ${sourceId}`);
+        hideUploadOverlay(900);
+        return;
+      }
+
+      if (status === "failed") {
+        const detail = source?.detail || "The file uploaded, but indexing failed. Please try another file.";
+        updateUploadOverlay(
+          "Upload failed",
+          detail,
+          "error"
+        );
+        setText(statusEl, `Upload failed: ${detail}`);
+        hideUploadOverlay(2200);
+        return;
+      }
+
+      updateUploadOverlay(
+        "Indexing source...",
+        `Please wait while the file is indexed and made ready for generation.${progress}`
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+
+    if (token === uploadWatchToken) {
+      updateUploadOverlay(
+        "Still indexing source...",
+        "This file is taking longer than usual. You can continue once the source status becomes ready."
+      );
+      setText(statusEl, "Still indexing source. You can continue once it becomes ready.");
+      hideUploadOverlay(2600);
     }
   }
 
@@ -1854,6 +1948,11 @@ window.addEventListener("DOMContentLoaded", () => {
     const f = fileEl.files && fileEl.files[0];
     if (!f) return;
 
+    const uploadToken = ++uploadWatchToken;
+    updateUploadOverlay(
+      "Uploading source...",
+      `Uploading "${f.name}" and preparing it for indexing.`
+    );
     setText(statusEl, `Uploading ${f.name} ...`);
 
     try {
@@ -1882,10 +1981,24 @@ window.addEventListener("DOMContentLoaded", () => {
           : `Uploaded: ${newId || f.name}`
       );
       await loadSessions();
-      await refreshSources();
+      if (newId) {
+        await waitForUploadedSourceReady(newId, uploadToken);
+      } else {
+        await refreshSources();
+        updateUploadOverlay("Source ready", "Your file was uploaded successfully.", "success");
+        hideUploadOverlay(900);
+      }
     } catch (e) {
+      uploadWatchToken += 1;
+      const message = e?.message || String(e);
       fileEl.value = "";
-      setText(statusEl, `Upload failed: ${e.message}`);
+      updateUploadOverlay(
+        "Upload failed",
+        message || "The file could not be uploaded. Please try again.",
+        "error"
+      );
+      hideUploadOverlay(2400);
+      setText(statusEl, `Upload failed: ${message}`);
     }
   });
 
