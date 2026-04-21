@@ -37,6 +37,16 @@ Rules:
 - For MCQ items, "answer" MUST be the actual correct letter among A, B, C, or D.
 - Do NOT default to "A".
 - Distribute correct answer positions naturally across A, B, C, and D when possible.
+Educational value rules:
+- Every question MUST be genuinely useful for studying the source.
+- Prefer questions about the main idea, objective, goal, workflow, methodology, architecture, logic, features, purpose, benefits, limitations, comparisons, inputs/outputs, or reasoning in the source.
+- Ask about meaning and understanding, not just surface recall.
+- Avoid low-value metadata questions about publisher, publication year, edition, press, copyright, ISBN, author/publisher metadata, title-page facts, or front-page trivia unless publication metadata is itself the topic of the source.
+- Avoid isolated proper nouns or tiny surface details when they have little learning value.
+- Good question example: "What is the main goal of the platform described in the source?"
+- Good question example: "How does the workflow move from uploaded source material to study output?"
+- Bad question example: "Which press published the document?"
+- Bad question example: "In what year was the document printed?"
 Style constraints:
 - For short-answer items, the answer must be very short: maximum 3 words.
 - Accept concise exact answers such as a single number, term, or name when supported by sources.
@@ -98,6 +108,14 @@ Rules:
 - For MCQ items, "answer" MUST be the actual correct letter among A, B, C, or D.
 - Do NOT default to "A".
 - Distribute correct answer positions naturally across A, B, C, and D when possible.
+Educational value rules:
+- Every tricky item MUST test meaningful understanding of the source, not cover-page trivia.
+- Prefer confusions about purpose, workflow steps, methodology, architecture, feature roles, similarities/differences, limitations, cause/effect, or why one concept is correct over another.
+- Avoid low-value metadata questions about publisher, publication year, edition, press, copyright, ISBN, author/publisher metadata, or title-page facts unless publication data is central to the source topic.
+- Distractors should reflect realistic conceptual misunderstandings from the source, not random trivia.
+- Good tricky example: "Which option best explains why the platform needs source grounding before generation?"
+- Good tricky example: "Which workflow step must happen before reliable study output can be produced?"
+- Bad tricky example: "Which publisher appears on the cover page?"
 Style constraints:
 - For short-answer items, the answer must be very short: maximum 3 words.
 - Accept concise exact answers such as a single number, term, or name when supported by sources.
@@ -111,14 +129,20 @@ SOURCES:
 
     "repair_json": """You MUST output valid JSON only.
 
-You previously produced JSON that FAILED citation validation.
+You previously produced JSON that FAILED validation or quality review.
 
 Allowed citations are ONLY: {allowed}
+
+Quality issues to fix:
+{quality_notes}
 
 Rules to fix:
 - Every item MUST either:
   (A) include citations that are all in the Allowed list, OR
   (B) if not supported by sources: set answer to "NOT_IN_SOURCES" and set citations to [].
+- Replace any weak or low-value metadata-focused question with a more educationally useful question grounded in the source.
+- Prefer meaning, concepts, workflow, methodology, architecture, features, purpose, benefits, limitations, comparisons, or reasoning.
+- Avoid publisher, publication year, edition, press, copyright, ISBN, author/publisher metadata, title-page trivia, or isolated proper nouns unless those are central to the source topic.
 - Keep the SAME schema and SAME number of items as the original output.
 - Do NOT add extra keys.
 

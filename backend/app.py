@@ -38,6 +38,42 @@ app.config["MAX_CONTENT_LENGTH"] = int(
 )
 
 MAX_REPAIR_TRIES = 1
+LOW_VALUE_METADATA_RE = re.compile(
+    r"\b(?:publisher|publication year|published by|printed by|edition|copyright|isbn|issn|author|editor|journal|volume|issue|university press)\b"
+    r"|(?:سنة النشر|الناشر|دار النشر|حقوق النشر|ردمك|الطبعة|المؤلف|المحرر)"
+    r"|(?:yayınevi|yayın|basım|baskı|telif|isbn|issn|yazar|editör)",
+    re.IGNORECASE,
+)
+LOW_VALUE_METADATA_QUESTION_RE = re.compile(
+    r"(?:who\s+(?:published|wrote|edited)|which\s+(?:publisher|press|edition)|what\s+is\s+the\s+(?:publisher|publication year|isbn|edition)|what\s+year\s+was.+published|when\s+was.+published|printed by|copyright)"
+    r"|(?:من\s+الناشر|ما\s+سنة\s+النشر|ما\s+رقم\s+ردمك|ما\s+الطبعة)"
+    r"|(?:hangi\s+yayınevi|kaçıncı\s+baskı|hangi\s+basım|yayın\s+yılı)",
+    re.IGNORECASE,
+)
+CONCEPT_FOCUS_RE = re.compile(
+    r"\b(?:main idea|objective|goal|purpose|workflow|process|method|methodology|architecture|feature|function|role|benefit|advantage|limitation|compare|comparison|difference|input|output|step|component|interaction|design|logic|reason|meaning|concept|principle|mechanism|solution|challenge|use case|system|why|how)\b"
+    r"|(?:الفكرة الرئيسية|الهدف|الغرض|سير العمل|المنهجية|الطريقة|البنية|الميزة|الوظيفة|الدور|الفائدة|القيود|المقارنة|الاختلاف|المدخلات|المخرجات|الخطوات|المكونات|التفاعل|المنطق|المعنى|المفهوم|الآلية|الحل|التحدي|كيف|لماذا)"
+    r"|(?:ana fikir|amaç|hedef|iş akışı|süreç|yöntem|metodoloji|mimari|özellik|işlev|rol|fayda|avantaj|sınırlama|karşılaştırma|fark|girdi|çıktı|adım|bileşen|etkileşim|mantık|anlam|kavram|mekanizma|çözüm|zorluk|neden|nasıl)",
+    re.IGNORECASE,
+)
+CONCEPT_OPENING_RE = re.compile(
+    r"^(?:how|why|what is the (?:main idea|purpose|goal|objective|role|difference)|which step|which statement best|compare)"
+    r"|^(?:كيف|لماذا|ما\s+(?:الهدف|الغرض|الفكرة الرئيسية|الفرق|الدور)|أي\s+خطوة|قارن)"
+    r"|^(?:nasıl|neden|amacı nedir|hedefi nedir|hangi adım|karşılaştır)",
+    re.IGNORECASE,
+)
+FRONT_MATTER_RE = re.compile(
+    r"\b(?:copyright|all rights reserved|isbn|issn|published by|printed by|publisher|edition|press|author|editor|table of contents|contents|preface|acknowledg(?:e)?ments?)\b"
+    r"|(?:حقوق النشر|جميع الحقوق محفوظة|ردمك|الناشر|دار النشر|الطبعة|المؤلف|المحرر|المحتويات|الفهرس|المقدمة|شكر وتقدير)"
+    r"|(?:telif|tüm hakları saklıdır|isbn|issn|yayınevi|yayıncı|baskı|yazar|editör|içindekiler|önsöz|teşekkür)",
+    re.IGNORECASE,
+)
+CONTENT_BEARING_RE = re.compile(
+    r"\b(?:objective|goal|purpose|workflow|process|method|architecture|feature|component|system|input|output|benefit|limitation|comparison|analysis|design|implementation|result|evaluation|challenge|solution)\b"
+    r"|(?:الهدف|الغرض|سير العمل|المنهجية|البنية|الميزة|المكون|النظام|المدخلات|المخرجات|الفائدة|القيود|المقارنة|التحليل|التصميم|التنفيذ|النتائج|التقييم|التحدي|الحل)"
+    r"|(?:amaç|hedef|iş akışı|süreç|yöntem|mimari|özellik|bileşen|sistem|girdi|çıktı|fayda|sınırlama|karşılaştırma|analiz|tasarım|uygulama|sonuç|değerlendirme|zorluk|çözüm)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_origin(origin: str) -> str:
@@ -84,6 +120,8 @@ MAX_PAGE_CHARS = int(os.getenv("MAX_PAGE_CHARS", "12000"))
 MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "250000"))
 MAX_SOURCES_CHARS_PER_REQUEST = int(os.getenv("MAX_SOURCES_CHARS_PER_REQUEST", "300000"))
 MAX_SESSION_NAME_CHARS = int(os.getenv("MAX_SESSION_NAME_CHARS", "120"))
+MAX_EMBED_INPUT_CHARS = int(os.getenv("MAX_EMBED_INPUT_CHARS", "6000"))
+MIN_EMBED_CHUNK_CHARS = int(os.getenv("MIN_EMBED_CHUNK_CHARS", "1200"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gpt-4.1-mini")
 
@@ -97,6 +135,9 @@ TOP_K_PAGES = int(os.getenv("TOP_K_PAGES", "6"))
 INDEX_BATCH_SIZE = int(os.getenv("INDEX_BATCH_SIZE", "24"))
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 SOURCE_ID_RE = re.compile(r"^S\d+$")
+SOURCE_MARKER_RE = re.compile(r"\[(S\d+):p(\d+)\]")
+PARAGRAPH_BREAK_RE = re.compile(r"\n\s*\n+")
+SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?؟۔])\s+")
 
 logs_dir = os.path.join(BASE_DIR, "logs")
 os.makedirs(logs_dir, exist_ok=True)
@@ -288,25 +329,215 @@ def _next_source_id(session_id: str) -> str:
     return f"S{nxt}"
 
 
+def _normalize_line_endings(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _normalize_inline_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _split_text_by_words(text: str, max_chars: int) -> list[str]:
+    words = re.split(r"\s+", _normalize_line_endings(text))
+    chunks = []
+    current = ""
+
+    for word in words:
+        if not word:
+            continue
+        if len(word) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            for start in range(0, len(word), max_chars):
+                piece = word[start : start + max_chars].strip()
+                if piece:
+                    chunks.append(piece)
+            continue
+
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+        current = word
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _split_large_paragraph(paragraph: str, max_chars: int) -> list[str]:
+    normalized = _normalize_inline_whitespace(paragraph)
+    if not normalized:
+        return []
+    if len(normalized) <= max_chars:
+        return [normalized]
+
+    sentences = [
+        _normalize_inline_whitespace(part)
+        for part in SENTENCE_BREAK_RE.split(normalized)
+        if _normalize_inline_whitespace(part)
+    ]
+    if len(sentences) <= 1:
+        return _split_text_by_words(normalized, max_chars)
+
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_text_by_words(sentence, max_chars))
+            continue
+
+        candidate = sentence if not current else f"{current} {sentence}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+        current = sentence
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _merge_small_tail_chunks(chunks: list[str], max_chars: int, min_chars: int) -> list[str]:
+    merged = [chunk for chunk in chunks if chunk]
+    while len(merged) >= 2 and len(merged[-1]) < min_chars:
+        combined = f"{merged[-2]}\n\n{merged[-1]}"
+        if len(combined) > max_chars:
+            break
+        merged[-2] = combined
+        merged.pop()
+    return merged
+
+
+def _chunk_plain_text_source(text: str, max_chars: int) -> list[str]:
+    normalized = _normalize_line_endings(text)
+    if not normalized:
+        return []
+
+    paragraphs = [
+        paragraph
+        for paragraph in (
+            _normalize_inline_whitespace(part)
+            for part in PARAGRAPH_BREAK_RE.split(normalized)
+        )
+        if paragraph
+    ]
+    if not paragraphs:
+        paragraphs = [_normalize_inline_whitespace(normalized)]
+
+    units = []
+    for paragraph in paragraphs:
+        units.extend(_split_large_paragraph(paragraph, max_chars))
+
+    chunks = []
+    current_parts = []
+    current_len = 0
+
+    for unit in units:
+        sep_len = 2 if current_parts else 0
+        candidate_len = current_len + sep_len + len(unit)
+        if current_parts and candidate_len > max_chars:
+            chunks.append("\n\n".join(current_parts))
+            current_parts = [unit]
+            current_len = len(unit)
+            continue
+
+        current_parts.append(unit)
+        current_len = candidate_len
+
+    if current_parts:
+        chunks.append("\n\n".join(current_parts))
+
+    return _merge_small_tail_chunks(chunks, max_chars, MIN_EMBED_CHUNK_CHARS)
+
+
+def _build_chunked_source_text(source_id: str, text: str) -> str:
+    chunks = _chunk_plain_text_source(text, MAX_EMBED_INPUT_CHARS)
+    if not chunks:
+        return ""
+
+    return "\n\n".join(
+        f"[{source_id}:p{idx}]\n{chunk}".strip()
+        for idx, chunk in enumerate(chunks, start=1)
+    ).strip()
+
+
+def _rewrite_source_markers(source_id: str, text: str) -> str:
+    normalized = _normalize_line_endings(text)
+    if not normalized:
+        return ""
+
+    return SOURCE_MARKER_RE.sub(
+        lambda match: f"[{source_id}:p{match.group(2)}]",
+        normalized,
+    ).strip()
+
+
 def _normalize_source_text(source_id: str, text: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return t
+    normalized = _normalize_line_endings(text)
+    if not normalized:
+        return normalized
 
-    # If no markers exist, wrap as single page.
-    if not re.search(r"\[S\d+:p\d+\]", t):
-        return f"[{source_id}:p1]\n{t}\n"
+    if not SOURCE_MARKER_RE.search(normalized):
+        return _build_chunked_source_text(source_id, normalized)
 
-    # If markers exist but point to another source_id, rewrite them to match.
-    m = re.search(r"\[(S\d+):p\d+\]", t)
-    if m and m.group(1) != source_id:
-        t = re.sub(
-            r"\[S\d+:p(\d+)\]",
-            lambda m2: f"[{source_id}:p{m2.group(1)}]",
-            t,
+    return _rewrite_source_markers(source_id, normalized)
+
+
+def _truncate_marked_source_text(text: str, max_chars: int) -> tuple[str, bool]:
+    normalized = _normalize_line_endings(text)
+    if len(normalized) <= max_chars:
+        return normalized, False
+
+    pages = _split_pages_by_marker(normalized)
+    if not pages:
+        return normalized[:max_chars].rstrip(), True
+
+    kept = []
+    total_len = 0
+    for _, full_with_marker, _ in pages:
+        block = full_with_marker.strip()
+        extra = 2 if kept else 0
+        if kept and (total_len + extra + len(block)) > max_chars:
+            break
+        if not kept and len(block) > max_chars:
+            return block[:max_chars].rstrip(), True
+        kept.append(block)
+        total_len += extra + len(block)
+
+    truncated = len(kept) < len(pages)
+    return "\n\n".join(kept).strip(), truncated
+
+
+def _indexing_error_detail(exc: Exception, start_index=None, total=None) -> str:
+    message = str(exc or "").strip()
+    lower = message.lower()
+    prefix = "Indexing failed while preparing embeddings for this source."
+    if start_index is not None and total:
+        prefix = f"Indexing failed while processing chunk {start_index} of {total}."
+
+    if "maximum input length" in lower or "invalid input" in lower:
+        return (
+            f"{prefix} One text chunk still exceeded the embedding size limit. "
+            "Try splitting the source into smaller parts."
         )
 
-    return t
+    if isinstance(exc, BadRequestError):
+        return f"{prefix} The embedding request was rejected."
+
+    return prefix
 
 
 def _cosine(a, b):
@@ -317,13 +548,13 @@ def _cosine(a, b):
 
 
 def _split_pages_by_marker(text: str):
-    parts = re.split(r"(?=\[S\d+:p\d+\])", (text or "").strip())
+    parts = re.split(r"(?=\[S\d+:p\d+\])", _normalize_line_endings(text))
     out = []
     for p in parts:
         p = p.strip()
         if not p:
             continue
-        m = re.match(r"^\[(S\d+):p(\d+)\]", p)
+        m = SOURCE_MARKER_RE.match(p)
         if not m:
             continue
         citation = f"{m.group(1)}:p{m.group(2)}"
@@ -339,8 +570,11 @@ def index_source_pages(session_id: str, source_text: str):
         return
 
     texts_for_embed = [content for _, _, content in pages]
-    emb = client.embeddings.create(model=EMBEDDING_MODEL, input=texts_for_embed)
-    vecs = [d.embedding for d in emb.data]
+    try:
+        emb = client.embeddings.create(model=EMBEDDING_MODEL, input=texts_for_embed)
+        vecs = [d.embedding for d in emb.data]
+    except Exception as exc:
+        raise RuntimeError(_indexing_error_detail(exc, 1, len(pages))) from exc
 
     src = None
     if pages:
@@ -391,8 +625,14 @@ def index_source_bg(session_id: str, source_id: str, text: str):
             batch = pages[start : start + INDEX_BATCH_SIZE]
             inputs = [content for _, _, content in batch]
 
-            emb = local_client.embeddings.create(model=EMBEDDING_MODEL, input=inputs)
-            vecs = [d.embedding for d in emb.data]
+            try:
+                emb = local_client.embeddings.create(model=EMBEDDING_MODEL, input=inputs)
+                vecs = [d.embedding for d in emb.data]
+            except Exception as exc:
+                chunk_start = start + 1
+                raise RuntimeError(
+                    _indexing_error_detail(exc, chunk_start, total)
+                ) from exc
 
             with db() as conn:
                 for (citation, full_with_marker, _), v in zip(batch, vecs):
@@ -414,6 +654,11 @@ def index_source_bg(session_id: str, source_id: str, text: str):
             )
 
     except Exception as e:
+        app.logger.exception(
+            "indexing failed session=%s source=%s",
+            session_id,
+            source_id,
+        )
         with db() as conn:
             conn.execute(
                 "UPDATE indexing_status SET status=?, detail=?, updated_at=? WHERE session_id=? AND source_id=?",
@@ -443,7 +688,8 @@ def retrieve_top_pages(
         if cit not in allowed_citations:
             continue
         emb = json.loads(r["emb_json"])
-        scored.append((_cosine(q_emb, emb), {"citation": cit, "text": r["text"]}))
+        score = _cosine(q_emb, emb) + _retrieval_priority_adjustment(r["text"])
+        scored.append((score, {"citation": cit, "text": r["text"]}))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     picked = [row for _, row in scored[:top_k]]
@@ -621,6 +867,141 @@ def _validate_citations(task_type: str, obj: dict, allowed: set[str]):
             raise ValueError(f"{key}[{idx}] has invalid citations: {bad[:5]}")
 
 
+def _strip_source_marker(text: str) -> str:
+    return re.sub(r"^\[S\d+:p\d+\]\s*", "", str(text or "")).strip()
+
+
+def _page_looks_like_front_matter(text: str) -> bool:
+    body = _strip_source_marker(text)
+    if not body:
+        return False
+
+    metadata_hits = set(LOW_VALUE_METADATA_RE.findall(body)) | set(FRONT_MATTER_RE.findall(body))
+    content_hits = set(CONTENT_BEARING_RE.findall(body)) | set(CONCEPT_FOCUS_RE.findall(body))
+    lowered = body.lower()
+
+    if any(
+        token in lowered
+        for token in (
+            "all rights reserved",
+            "published by",
+            "printed by",
+            "table of contents",
+            "copyright",
+            "isbn",
+            "issn",
+        )
+    ):
+        return True
+
+    return len(metadata_hits) >= 2 and len(content_hits) == 0
+
+
+def _retrieval_priority_adjustment(text: str) -> float:
+    body = _strip_source_marker(text)
+    if not body:
+        return 0.0
+
+    if _page_looks_like_front_matter(body):
+        return -0.18
+
+    content_hits = len(set(CONTENT_BEARING_RE.findall(body)))
+    if content_hits:
+        return min(0.08, content_hits * 0.02)
+
+    return 0.0
+
+
+def _question_items(task_type: str, obj: dict) -> list[dict]:
+    if task_type in ("quiz_json", "tricky_json"):
+        items = obj.get("items", [])
+        return items if isinstance(items, list) else []
+    return []
+
+
+def _question_quality_issues(task_type: str, obj: dict, sources_text: str) -> list[dict]:
+    if task_type not in ("quiz_json", "tricky_json"):
+        return []
+
+    page_map = {
+        citation: content
+        for citation, _, content in _split_pages_by_marker(sources_text)
+    }
+    issues = []
+
+    for idx, item in enumerate(_question_items(task_type, obj), start=1):
+        if not isinstance(item, dict) or _item_is_not_in_sources(task_type, item):
+            continue
+
+        question = str(item.get("question") or "").strip()
+        if not question:
+            continue
+
+        explanation = str(item.get("explanation") or "").strip()
+        joined = f"{question}\n{explanation}".strip()
+        citations = item.get("citations", [])
+        citations = citations if isinstance(citations, list) else []
+        cited_texts = [page_map.get(citation, "") for citation in citations]
+        front_matter_hits = sum(1 for text in cited_texts if _page_looks_like_front_matter(text))
+        metadata_hits = set(LOW_VALUE_METADATA_RE.findall(joined))
+        concept_hits = set(CONCEPT_FOCUS_RE.findall(joined))
+        weak_prompt_hit = bool(LOW_VALUE_METADATA_QUESTION_RE.search(question))
+        score = 0
+
+        if concept_hits:
+            score += min(4, len(concept_hits) * 2)
+        if CONCEPT_OPENING_RE.search(question):
+            score += 2
+        if metadata_hits:
+            score -= min(6, len(metadata_hits) * 2)
+        if weak_prompt_hit:
+            score -= 4
+        if citations and front_matter_hits == len(citations):
+            score -= 3
+
+        is_weak = weak_prompt_hit or (
+            metadata_hits and not concept_hits and score <= 0
+        ) or score <= -2
+        if not is_weak:
+            continue
+
+        reasons = []
+        if weak_prompt_hit:
+            reasons.append("question targets publication or bibliographic metadata")
+        if metadata_hits:
+            reasons.append("metadata terms dominate the wording")
+        if citations and front_matter_hits == len(citations):
+            reasons.append("citations point only to front matter or bibliographic text")
+        if not concept_hits:
+            reasons.append("question lacks conceptual study value")
+
+        issues.append(
+            {
+                "index": idx,
+                "question": question,
+                "score": score,
+                "reasons": reasons or ["question is too superficial"],
+            }
+        )
+
+    return issues
+
+
+def _format_quality_notes(issues: list[dict]) -> str:
+    if not issues:
+        return "None."
+
+    lines = [
+        "Replace these weak questions with concept-focused, educationally useful questions:"
+    ]
+    for issue in issues[:8]:
+        reason_text = "; ".join(issue.get("reasons", []))
+        lines.append(
+            f"- item {issue['index']}: {issue['question']} ({reason_text})"
+        )
+    return "\n".join(lines)
+
+
 def _safe_int(x, default=5, min_v=1, max_v=50):
     try:
         v = int(x)
@@ -689,6 +1070,43 @@ def _shuffle_mcq_items(task_type: str, obj: dict, shuffle_choices: bool) -> dict
 def _serialize_output(task_type: str, obj: dict, shuffle_choices: bool) -> tuple[dict, str]:
     processed = _shuffle_mcq_items(task_type, obj, shuffle_choices)
     return processed, json.dumps(processed, ensure_ascii=False)
+
+
+def _repair_generated_output(
+    task_type: str,
+    schema: dict,
+    output_text: str,
+    sources_text: str,
+    allowed_citations: set[str],
+    quality_issues: list[dict],
+):
+    repair_prompt = PRESETS["repair_json"].format(
+        allowed=sorted(list(allowed_citations)),
+        bad_output=output_text,
+        sources=sources_text,
+        quality_notes=_format_quality_notes(quality_issues),
+    )
+
+    resp = client.responses.create(
+        model=GENERATION_MODEL,
+        input=repair_prompt,
+        **GENERATION_KW,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": f"{task_type}_repair",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    )
+    repaired_text = resp.output_text
+    repaired_obj = json.loads(repaired_text)
+
+    repaired_quality_issues = _question_quality_issues(
+        task_type, repaired_obj, sources_text
+    )
+    return repaired_obj, repaired_text, repaired_quality_issues
 
 
 @app.get("/health")
@@ -956,10 +1374,7 @@ def add_source_text():
         )
 
     normalized = _normalize_source_text(source_id, text)
-    truncated = False
-    if len(normalized) > MAX_SOURCE_CHARS:
-        normalized = normalized[:MAX_SOURCE_CHARS]
-        truncated = True
+    normalized, truncated = _truncate_marked_source_text(normalized, MAX_SOURCE_CHARS)
 
     try:
         store_source(
@@ -1145,6 +1560,8 @@ def generate():
         system_msg = (
             "You generate study materials strictly from SOURCES.\n"
             "Citations MUST be copied exactly from markers like [S1:p3] present in SOURCES; never invent citations.\n"
+            "Favor educationally useful, concept-focused questions about purpose, workflow, methodology, architecture, features, benefits, comparisons, and reasoning.\n"
+            "Avoid low-value publication or bibliographic trivia unless the source is directly about publication metadata.\n"
             "If info is missing in sources: use NOT_IN_SOURCES and citations [].\n"
             "Return only JSON matching the required schema."
         )
@@ -1185,39 +1602,35 @@ def generate():
             ), 502
 
         allowed = _allowed_citations_from_sources(sources_text)
+        validation_error = None
         try:
             _validate_count(task_type, obj, n)
             _validate_citations(task_type, obj, allowed)
         except Exception as e:
-            allowed_list = sorted(list(allowed))
-            repair_prompt = PRESETS["repair_json"].format(
-                allowed=allowed_list,
-                bad_output=out,
-                sources=sources_text,
-            )
+            validation_error = e
 
+        quality_issues = _question_quality_issues(task_type, obj, sources_text)
+        needs_repair = validation_error is not None or bool(quality_issues)
+
+        if needs_repair:
             try:
                 if MAX_REPAIR_TRIES < 1:
                     raise RuntimeError("MAX_REPAIR_TRIES is 0")
 
-                resp2 = client.responses.create(
-                    model=GENERATION_MODEL,
-                    input=repair_prompt,
-                    **GENERATION_KW,
-                    text={
-                        "format": {
-                            "type": "json_schema",
-                            "name": f"{task_type}_repair",
-                            "schema": schema,
-                            "strict": True,
-                        }
-                    },
+                obj2, out2, repaired_quality_issues = _repair_generated_output(
+                    task_type=task_type,
+                    schema=schema,
+                    output_text=out,
+                    sources_text=sources_text,
+                    allowed_citations=allowed,
+                    quality_issues=quality_issues,
                 )
-                out2 = resp2.output_text
-                obj2 = json.loads(out2)
 
                 _validate_count(task_type, obj2, n)
                 _validate_citations(task_type, obj2, allowed)
+                if repaired_quality_issues:
+                    raise ValueError(_format_quality_notes(repaired_quality_issues))
+
                 obj2, out2 = _serialize_output(task_type, obj2, shuffle_choices)
                 return jsonify(
                     {
@@ -1225,15 +1638,29 @@ def generate():
                         "output": out2,
                         "output_json": obj2,
                         "repaired": True,
+                        "quality_repaired": bool(quality_issues),
                     }
                 )
 
-            except Exception:
+            except Exception as repair_error:
+                details = []
+                if validation_error is not None:
+                    details.append(str(validation_error))
+                if quality_issues:
+                    details.append(_format_quality_notes(quality_issues))
+
+                error_code = (
+                    "CITATION_VALIDATION_FAILED"
+                    if validation_error is not None
+                    else "QUESTION_QUALITY_VALIDATION_FAILED"
+                )
                 return jsonify(
                     {
-                        "error": "CITATION_VALIDATION_FAILED",
-                        "details": str(e),
+                        "error": error_code,
+                        "details": "\n".join(part for part in details if part).strip()
+                        or str(repair_error),
                         "allowed_count": len(allowed),
+                        "weak_questions": quality_issues,
                     }
                 ), 422
 
@@ -1346,11 +1773,8 @@ def upload():
 
     if filename.endswith(".txt"):
         text = f.read().decode("utf-8", errors="ignore")
-        combined = f"[{source_id}:p1]\n{text}\n"
-        truncated = False
-        if len(combined) > MAX_SOURCE_CHARS:
-            combined = combined[:MAX_SOURCE_CHARS]
-            truncated = True
+        combined = _normalize_source_text(source_id, text)
+        combined, truncated = _truncate_marked_source_text(combined, MAX_SOURCE_CHARS)
         try:
             store_source(
                 session_id,
@@ -1407,9 +1831,8 @@ def upload():
                 truncated = True
             parts.append(f"[{source_id}:p{i}]\n{page_text}".strip())
         combined = "\n\n".join(parts).strip()
-        if len(combined) > MAX_SOURCE_CHARS:
-            combined = combined[:MAX_SOURCE_CHARS]
-            truncated = True
+        combined, combined_truncated = _truncate_marked_source_text(combined, MAX_SOURCE_CHARS)
+        truncated = truncated or combined_truncated
         try:
             store_source(
                 session_id,

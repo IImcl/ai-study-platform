@@ -842,6 +842,10 @@ body[data-theme="light"] .select-shell select{
   flex-wrap: wrap;
 }
 
+.settings-action-strip{
+  margin-top: 18px;
+}
+
 button{
   position: relative;
   overflow: hidden;

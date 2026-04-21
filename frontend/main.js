@@ -833,9 +833,10 @@ window.addEventListener("DOMContentLoaded", () => {
   let modalState = null;
   let uploadOverlayTimer = null;
   let uploadWatchToken = 0;
+  const isRawView = () => !!viewEl && viewEl.value === "raw";
 
   function syncOutputView() {
-    const rawMode = viewEl && viewEl.value === "raw";
+    const rawMode = isRawView();
     if (outPretty) outPretty.style.display = rawMode ? "none" : "";
     if (outRaw) outRaw.style.display = rawMode ? "block" : "none";
   }
@@ -1406,7 +1407,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function rerenderLastPretty() {
-    if (!lastRaw || viewEl.value === "raw") return;
+    if (!lastRaw || isRawView()) return;
 
     try {
       const parsed = JSON.parse(lastRaw);
@@ -1549,7 +1550,7 @@ window.addEventListener("DOMContentLoaded", () => {
       syncOutputView();
       if (!lastRaw) return;
 
-      if (viewEl.value === "raw") {
+      if (isRawView()) {
         setText(outRaw, lastRaw);
         return;
       }
@@ -1908,10 +1909,10 @@ window.addEventListener("DOMContentLoaded", () => {
           : "";
       }
 
-      if (viewEl.value === "raw") {
+      if (isRawView()) {
         syncOutputView();
-        setText(outRaw, lastRaw);
         outPretty.innerHTML = "";
+        showRawOutput(lastRaw);
         return;
       }
 

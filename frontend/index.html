@@ -81,17 +81,6 @@
               </div>
 
               <div class="field">
-                <label for="view">View</label>
-                <div class="select-shell">
-                  <select id="view" data-custom-select="true">
-                    <option value="pretty">Pretty</option>
-                    <option value="raw">Raw</option>
-                  </select>
-                  <span class="select-arrow">v</span>
-                </div>
-              </div>
-
-              <div class="field">
                 <label for="lang">Language</label>
                 <div class="select-shell">
                   <select id="lang" data-custom-select="true">
@@ -160,6 +149,24 @@
               <span id="examTimer" class="exam-timer" style="display:none;">Time: --:--</span>
               <button id="resetScore" style="display:none;">Reset</button>
               <button id="finishExam" style="display:none;">Finish Exam</button>
+            </div>
+
+            <div class="action-strip settings-action-strip">
+              <button id="go" class="primary big-cta">Generate</button>
+              <button id="copy">Copy Output</button>
+
+              <div class="dropdown" id="downloadDropdown">
+                <button type="button" class="dropdown-toggle" id="downloadMenuBtn" aria-haspopup="true" aria-expanded="false">
+                  Download
+                  <span class="mini-arrow">v</span>
+                </button>
+                <div class="dropdown-menu" id="downloadMenu">
+                  <button type="button" id="downloadTxtBtn" class="dropdown-item">Download TXT</button>
+                  <button type="button" id="downloadJsonBtn" class="dropdown-item">Download JSON</button>
+                  <button type="button" id="downloadCsvBtn" class="dropdown-item">Download CSV</button>
+                </div>
+              </div>
+
               <button id="printExam">Print</button>
             </div>
           </section>
@@ -233,23 +240,6 @@
               <button id="addManual" class="manual-add">Add as Source</button>
             </div>
           </section>
-
-          <div class="action-strip">
-            <button id="go" class="primary big-cta">Generate</button>
-            <button id="copy">Copy Output</button>
-
-            <div class="dropdown" id="downloadDropdown">
-              <button type="button" class="dropdown-toggle" id="downloadMenuBtn" aria-haspopup="true" aria-expanded="false">
-                Download
-                <span class="mini-arrow">v</span>
-              </button>
-              <div class="dropdown-menu" id="downloadMenu">
-                <button type="button" id="downloadTxtBtn" class="dropdown-item">Download TXT</button>
-                <button type="button" id="downloadJsonBtn" class="dropdown-item">Download JSON</button>
-                <button type="button" id="downloadCsvBtn" class="dropdown-item">Download CSV</button>
-              </div>
-            </div>
-          </div>
 
           <section class="panel result-panel">
             <div id="status" class="status"></div>
