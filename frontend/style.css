@@ -471,6 +471,7 @@ body.upload-overlay-open{
 }
 
 .upload-overlay{
+  --overlay-progress-color: var(--accent-2);
   position: fixed;
   inset: 0;
   z-index: 1275;
@@ -514,6 +515,47 @@ body[data-theme="light"] .upload-overlay-card{
   border: 4px solid rgba(139, 184, 255, .20);
   border-top-color: var(--accent-2);
   animation: uploadSpin .85s linear infinite;
+}
+
+.upload-progress{
+  width: 76px;
+  min-width: 76px;
+}
+
+.upload-progress-ring{
+  --progress: 0%;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  padding: 6px;
+  background: conic-gradient(var(--overlay-progress-color) var(--progress), rgba(139, 184, 255, .16) 0);
+  box-shadow: inset 0 0 0 1px rgba(139, 184, 255, .14);
+}
+
+.upload-progress-value{
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(13, 24, 44, .98) 0%, rgba(9, 19, 38, .98) 100%);
+}
+
+:root[data-theme="light"] .upload-progress-value,
+html[data-theme="light"] .upload-progress-value,
+body[data-theme="light"] .upload-progress-value{
+  background: linear-gradient(180deg, rgba(255, 255, 255, .98) 0%, rgba(246, 249, 255, .98) 100%);
+}
+
+.upload-overlay.success{
+  --overlay-progress-color: var(--ok);
+}
+
+.upload-overlay.error{
+  --overlay-progress-color: var(--danger);
 }
 
 .upload-overlay.success .upload-spinner,
@@ -1782,6 +1824,20 @@ pre{
     width: 48px;
     min-width: 48px;
     height: 48px;
+  }
+
+  .upload-progress{
+    width: 64px;
+    min-width: 64px;
+  }
+
+  .upload-progress-ring{
+    width: 64px;
+    height: 64px;
+  }
+
+  .upload-progress-value{
+    font-size: 16px;
   }
 
   .dropdown-menu{

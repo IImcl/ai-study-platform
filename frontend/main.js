@@ -821,6 +821,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const modalCancelBtn = document.getElementById("modalCancel");
   const modalConfirmBtn = document.getElementById("modalConfirm");
   const uploadOverlayEl = document.getElementById("uploadOverlay");
+  const uploadOverlaySpinnerEl = document.getElementById("uploadOverlaySpinner");
+  const uploadOverlayProgressEl = document.getElementById("uploadOverlayProgress");
+  const uploadOverlayPercentEl = document.getElementById("uploadOverlayPercent");
   const uploadOverlayTitleEl = document.getElementById("uploadOverlayTitle");
   const uploadOverlayDetailEl = document.getElementById("uploadOverlayDetail");
   const themeBtn = document.getElementById("themeToggle");
@@ -833,6 +836,8 @@ window.addEventListener("DOMContentLoaded", () => {
   let modalState = null;
   let uploadOverlayTimer = null;
   let uploadWatchToken = 0;
+  let generateOverlayTimer = null;
+  let generateOverlayPercent = 0;
   const isRawView = () => !!viewEl && viewEl.value === "raw";
 
   function syncOutputView() {
@@ -845,6 +850,31 @@ window.addEventListener("DOMContentLoaded", () => {
     if (outPretty) outPretty.style.display = "none";
     if (outRaw) outRaw.style.display = "block";
     setText(outRaw, text);
+  }
+
+  function clearGeneratedOutput(reason = "") {
+    const hadOutput = !!(
+      lastRaw ||
+      outPretty?.innerHTML?.trim() ||
+      outRaw?.textContent?.trim() ||
+      retrievedBoxEl?.textContent?.trim()
+    );
+
+    if (outPretty) outPretty.innerHTML = "";
+    setText(outRaw, "");
+    if (retrievedBoxEl) retrievedBoxEl.textContent = "";
+    lastRaw = "";
+
+    stopExamTimer();
+    examFinished = false;
+    score = { correct: 0, answered: 0, total: 0 };
+    setExamTimerText("Time: --:--", false);
+    document.getElementById("finalBanner")?.remove();
+    updateScoreUI();
+    syncOutputView();
+
+    if (reason && hadOutput) setText(statusEl, reason);
+    return hadOutput;
   }
 
   function closeDownloadMenu() {
@@ -971,7 +1001,75 @@ window.addEventListener("DOMContentLoaded", () => {
     if (resolve) resolve(result);
   }
 
-  function updateUploadOverlay(title, detail, state = "loading") {
+  function setUploadOverlayMode(mode = "spinner") {
+    if (!uploadOverlayEl) return;
+
+    const progressMode = mode === "progress";
+    if (uploadOverlaySpinnerEl) uploadOverlaySpinnerEl.hidden = progressMode;
+    if (uploadOverlayProgressEl) uploadOverlayProgressEl.hidden = !progressMode;
+  }
+
+  function setUploadOverlayPercent(percent = 0) {
+    if (!uploadOverlayProgressEl || !uploadOverlayPercentEl) return;
+
+    const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    uploadOverlayProgressEl.style.setProperty("--progress", `${value}%`);
+    uploadOverlayPercentEl.textContent = `${value}%`;
+  }
+
+  function clearGenerateOverlayTimer() {
+    if (!generateOverlayTimer) return;
+    clearInterval(generateOverlayTimer);
+    generateOverlayTimer = null;
+  }
+
+  function startGenerateOverlay() {
+    clearGenerateOverlayTimer();
+    generateOverlayPercent = 1;
+    updateUploadOverlay(
+      "Generating study output...",
+      "Please wait while your selected sources are analyzed and the result is prepared.",
+      "loading",
+      { mode: "progress", percent: generateOverlayPercent }
+    );
+
+    generateOverlayTimer = window.setInterval(() => {
+      const cap = generateOverlayPercent < 70 ? 90 : 96;
+      const step =
+        generateOverlayPercent < 18 ? 4 :
+        generateOverlayPercent < 48 ? 3 :
+        generateOverlayPercent < 74 ? 2 : 1;
+
+      if (generateOverlayPercent >= cap) return;
+      generateOverlayPercent = Math.min(cap, generateOverlayPercent + step);
+      setUploadOverlayPercent(generateOverlayPercent);
+    }, 130);
+  }
+
+  function finishGenerateOverlay(success = true, detail = "") {
+    clearGenerateOverlayTimer();
+    if (success) {
+      generateOverlayPercent = 100;
+      updateUploadOverlay(
+        "Generation complete",
+        detail || "Your study output is ready.",
+        "success",
+        { mode: "progress", percent: 100 }
+      );
+      hideUploadOverlay(550);
+      return;
+    }
+
+    updateUploadOverlay(
+      "Generation failed",
+      detail || "The study output could not be generated.",
+      "error",
+      { mode: "progress", percent: Math.max(generateOverlayPercent, 1) }
+    );
+    hideUploadOverlay(1400);
+  }
+
+  function updateUploadOverlay(title, detail, state = "loading", options = {}) {
     if (!uploadOverlayEl) return;
 
     if (uploadOverlayTimer) {
@@ -979,6 +1077,8 @@ window.addEventListener("DOMContentLoaded", () => {
       uploadOverlayTimer = null;
     }
 
+    setUploadOverlayMode(options.mode === "progress" ? "progress" : "spinner");
+    setUploadOverlayPercent(options.percent ?? 0);
     uploadOverlayTitleEl.textContent = title || "Uploading and preparing your source...";
     uploadOverlayDetailEl.textContent = detail || "Please wait while the file is uploaded and indexed.";
     uploadOverlayEl.classList.toggle("success", state === "success");
@@ -991,11 +1091,14 @@ window.addEventListener("DOMContentLoaded", () => {
   function hideUploadOverlay(delay = 0) {
     if (!uploadOverlayEl) return;
 
+    clearGenerateOverlayTimer();
     if (uploadOverlayTimer) clearTimeout(uploadOverlayTimer);
     uploadOverlayTimer = window.setTimeout(() => {
       uploadOverlayEl.hidden = true;
       uploadOverlayEl.classList.remove("success", "error");
       uploadOverlayEl.setAttribute("aria-busy", "false");
+      setUploadOverlayMode("spinner");
+      setUploadOverlayPercent(0);
       document.body.classList.remove("upload-overlay-open");
       uploadOverlayTimer = null;
     }, delay);
@@ -1133,6 +1236,7 @@ window.addEventListener("DOMContentLoaded", () => {
     rememberSession({ session_id: sessionId, name: normalizedTitle });
     selected.clear();
     saveSelected(selected);
+    clearGeneratedOutput();
     updateSelectedInfo();
     syncCurrentSessionLabel();
     closeSidebar();
@@ -1196,6 +1300,7 @@ window.addEventListener("DOMContentLoaded", () => {
         rememberSession(session);
         selected.clear();
         saveSelected(selected);
+        clearGeneratedOutput();
         updateSelectedInfo();
         syncCurrentSessionLabel();
         closeSidebar();
@@ -1286,6 +1391,7 @@ window.addEventListener("DOMContentLoaded", () => {
               rememberSession({ session_id: sessionId });
               selected.clear();
               saveSelected(selected);
+              clearGeneratedOutput();
               updateSelectedInfo();
               syncCurrentSessionLabel();
             }
@@ -1615,6 +1721,7 @@ window.addEventListener("DOMContentLoaded", () => {
       x.onclick = () => {
         selected.delete(sid);
         saveSelected(selected);
+        clearGeneratedOutput("Source selection changed. Previous output was cleared.");
         updateSelectedInfo();
         refreshSources();
       };
@@ -1656,6 +1763,7 @@ window.addEventListener("DOMContentLoaded", () => {
           else selected.delete(s.source_id);
           row.classList.toggle("selected", cb.checked);
           saveSelected(selected);
+          clearGeneratedOutput("Source selection changed. Previous output was cleared.");
           updateSelectedInfo();
         });
 
@@ -1701,6 +1809,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
             selected.delete(s.source_id);
             saveSelected(selected);
+            clearGeneratedOutput("Source set changed. Previous output was cleared.");
             updateSelectedInfo();
             setText(statusEl, `Deleted: ${s.source_id}`);
             await refreshSources();
@@ -1809,6 +1918,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    clearGeneratedOutput();
     setText(statusEl, "Adding manual source...");
     try {
       const body = { text };
@@ -1873,6 +1983,8 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    startGenerateOverlay();
+
     try {
       const res = await apiFetch("/generate", {
         method: "POST",
@@ -1884,6 +1996,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
       if (!res.ok) {
         lastRaw = JSON.stringify(data, null, 2);
+        let overlayMsg =
+          (data && data.details) ? data.details :
+          (data && data.error) ? data.error :
+          `HTTP ${res.status}`;
         const errMsg =
           (data && data.details) ? data.details :
           (data && data.error) ? data.error :
@@ -1895,12 +2011,20 @@ window.addEventListener("DOMContentLoaded", () => {
         if (res.status === 409 && data && data.error === "SOURCES_NOT_INDEXED") {
           setText(statusEl, "Indexing not finished ❌ (wait until sources become ready)");
         }
+        if (res.status === 413 && data && data.error === "SOURCES_TOO_LARGE") {
+          overlayMsg = "Selected sources are too large. Reduce the selected sources or pages and try again.";
+        }
+        if (res.status === 409 && data && data.error === "SOURCES_NOT_INDEXED") {
+          overlayMsg = "Indexing is not finished yet. Wait until the selected sources become ready.";
+        }
+        finishGenerateOverlay(false, overlayMsg);
         setText(outRaw, lastRaw);
         outPretty.innerHTML = "";
         return;
       }
 
       lastRaw = data.output || "";
+      finishGenerateOverlay(true, "Your study output is ready.");
       setText(statusEl, "Done ?");
       if (retrievedBoxEl) {
         const r = data.retrieved || [];
@@ -1940,6 +2064,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     } catch (e) {
       const msg = (e && e.message) ? e.message : String(e);
+      finishGenerateOverlay(false, msg);
       setText(statusEl, `ERROR: ${msg}`);
       showRawOutput(`ERROR: ${msg}`);
     }
@@ -1949,6 +2074,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const f = fileEl.files && fileEl.files[0];
     if (!f) return;
 
+    clearGeneratedOutput();
     const uploadToken = ++uploadWatchToken;
     updateUploadOverlay(
       "Uploading source...",
@@ -2161,11 +2287,8 @@ window.addEventListener("DOMContentLoaded", () => {
       await apiFetchJson("/sources", { method: "DELETE" });
       selected.clear();
       saveSelected(selected);
+      clearGeneratedOutput();
       updateSelectedInfo();
-      outPretty.innerHTML = "";
-      setText(outRaw, "");
-      lastRaw = "";
-      if (retrievedBoxEl) retrievedBoxEl.textContent = "";
       setText(statusEl, "All sources cleared.");
       await refreshSources();
     } catch (e) {
